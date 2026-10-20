@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-20T23:35:34Z",
+  "registries": {
+    "local": {
+      "url": "https://raw.githubusercontent.com/MetrolistGroup/faraday/1fe788e77ef9c67619fd1d890b55497c3fc61964/registry/player_configs.json",
+      "sha256": "0299c64e22381ee0257dea867fe9eea06d26746bdef5704e89761d65e02f31a1"
+    },
+    "public": {
+      "url": "https://raw.githubusercontent.com/MetrolistGroup/faraday/060f1916cf5374e794bbad7528de055f47fa85dc/registry/player_configs.json",
+      "sha256": "839f9a129d181d5071781a7322a23b496c92360e1dccc0f3f7f428f12e58f98b"
+    }
+  },
+  "players": [
+    {
+      "id": "4f38b487",
+      "file": "4f38b487.js",
+      "url": "https://www.youtube.com/s/player/4f38b487/player_ias.vflset/en_GB/base.js",
+      "sha256": "2d440d1c8fab8b79cc602a354cdbd3b52595478c69eb3ce0f795342128f6128a",
+      "bytes": 2778899,
+      "signatureExpression": "Tl(48,5831,INPUT)",
+      "nClass": "W_",
+      "signatureTimestamp": 20602,
+      "registry": "local",
+      "reason": "Older dispatcher: Tl(48,5831), W_ URL wrapper; timestamp 20602"
+    },
+    {
+      "id": "10733253",
+      "file": "10733253.js",
+      "url": "https://www.youtube.com/s/player/10733253/player_ias.vflset/en_GB/base.js",
+      "sha256": "b049105293db560829fc3a4c9eeb4ab69ce7ca4db7e34b9274af2800478519f6",
+      "bytes": 2957946,
+      "signatureExpression": "dS(7,2166,INPUT)",
+      "nClass": "np",
+      "signatureTimestamp": 20699,
+      "registry": "local",
+      "reason": "Intermediate dispatcher: dS(7,2166), np URL wrapper; timestamp 20699"
+    },
+    {
+      "id": "eb27e5fd",
+      "file": "eb27e5fd.js",
+      "url": "https://www.youtube.com/s/player/eb27e5fd/player_ias.vflset/en_GB/base.js",
+      "sha256": "12e6263ff6cb18aa502baf598e5cf17c4eb2b96b12c347c78e4f8458950dcc43",
+      "bytes": 2976896,
+      "signatureExpression": "Su(11,3932,INPUT)",
+      "nClass": "cg",
+      "signatureTimestamp": 20724,
+      "registry": "local",
+      "reason": "Original supplied fixture: Su(11,3932), cg URL wrapper; timestamp 20724"
+    },
+    {
+      "id": "5008be0a",
+      "file": "5008be0a.js",
+      "url": "https://www.youtube.com/s/player/5008be0a/player_ias.vflset/en_GB/base.js",
+      "sha256": "934a38ab085ef80236df79f9023d0cd765dbddd95d7ade0eeaa52e7fec2ea8fc",
+      "bytes": 2968897,
+      "signatureExpression": "Gl(17,1452,INPUT)",
+      "nClass": "Fl",
+      "signatureTimestamp": 20746,
+      "registry": "public",
+      "reason": "Latest public registry entry at capture: Gl(17,1452), Fl URL wrapper; timestamp 20746"
+    }
+  ]
+}
