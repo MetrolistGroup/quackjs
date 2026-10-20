@@ -37,11 +37,11 @@ node scripts/player-oracle.mjs
 # Deliberate regeneration using the complete original JS, never PlayerProgram.
 node scripts/player-oracle.mjs --write
 
-# Independent native QuickJS cross-check; does not need the separate core lane.
-./gradlew jvmTest -PoracleOnly --rerun-tasks
-
-# After integrating the core implementation, run ALL JVM tests (no oracleOnly).
+# Default: original QuickJS oracle now; automatically includes Kotlin parity when core sources land.
 ./gradlew jvmTest --rerun-tasks
+
+# Force the independent native QuickJS cross-check even after core integration.
+./gradlew jvmTest -PoracleOnly --rerun-tasks
 ```
 
 `fixtures/goldens.json` records 16 signature and 15 n cases per player: **124
@@ -83,8 +83,13 @@ corpus, not arbitrary untrusted scripts.
 source with its `PlayerHints`, checks `signatureTimestamp`, and compares every
 output while reusing the program in forward/reverse/forward order. It never
 uses Kotlin results to generate goldens. Hint-free discovery is not tested.
-`-PoracleOnly` excludes only the two files that reference the pending core API
-(`PlayerParityTest.kt`, `PlayerBenchmark.kt`); it is not a library parity pass.
+While `src/commonMain/kotlin` contains no Kotlin sources, the default JVM test
+source set excludes the two files that reference the pending core API
+(`PlayerParityTest.kt`, `PlayerBenchmark.kt`) and announces oracle-only mode.
+Adding any core Kotlin source automatically enables both files, so absent or
+broken public API declarations then fail compilation rather than silently
+skipping parity. `-PoracleOnly` explicitly excludes the same two files even
+after integration. Neither oracle-only mode is a library parity pass.
 
 ## Re-fetching a fixture
 
@@ -112,8 +117,9 @@ oracle changes together when intentionally rotating the corpus.
 ./gradlew playerBenchmark --console=plain | tee /tmp/quackjs-benchmark.txt
 ```
 
-The task uses only JVM test sources/dependencies and fails if `-PoracleOnly`
-is supplied. Before printing any measurements it checks all original-player
+The task uses only JVM test sources/dependencies and fails clearly if core
+sources are absent or `-PoracleOnly` is supplied. Before printing any
+measurements it checks all original-player
 goldens against both implementations. Every timed sample's complete output is
 also compared outside the timer; mismatches abort the run, not get skipped.
 There are no performance thresholds or unmeasured speed claims.
@@ -157,8 +163,9 @@ Environment: Node v26.11.1; Temurin OpenJDK 21.0.12.1+1-LTS; Linux
 | `./gradlew jvmTest -PoracleOnly --rerun-tasks` | Passed: original full-player QuickJS output equals independent Node goldens |
 | `./gradlew dependencies --configuration jvmRuntimeClasspath` | Only Kotlin stdlib/annotations; no QuickJS runtime dependency |
 | `./gradlew playerBenchmark --dry-run` | Task configuration/dependencies resolved; not an execution or timing result |
-| `./gradlew jvmTest` | Blocked at compile: separate core lane has not supplied `PlayerProgram`/`PlayerHints` in this worktree |
-| Full Kotlin-vs-QuickJS benchmark | Not run, same missing-core blocker; **no comparative timing numbers available** |
+| `./gradlew jvmTest --rerun-tasks` | Passed in announced oracle-only mode: core-dependent files excluded while commonMain has no Kotlin sources |
+| `./gradlew playerBenchmark` | Correctly rejects missing commonMain core with an explicit integration error |
+| Full Kotlin-vs-QuickJS benchmark | Not run: separate core lane has not supplied `PlayerProgram`/`PlayerHints`; **no comparative timing numbers available** |
 
 Do not interpret the oracle-only pass as Kotlin correctness or benchmark
 readiness. After integration, run the complete JVM suite and the benchmark
