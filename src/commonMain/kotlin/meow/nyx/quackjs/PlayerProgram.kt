@@ -54,7 +54,9 @@ public class PlayerProgram private constructor(
                 if (result !is String) unsupported("Signature transform did not return a string")
                 val parsed = runtime.definitions.toMap()
                 val initializer = Runtime(source)
-                val templates = parsed.filterValues(::templateSafe).mapValues { initializer.expression(it.value) }
+                val templates = buildMap {
+                    for ((name, expr) in parsed) if (templateSafe(expr)) put(name, initializer.expression(expr))
+                }
                 val dispatch = runtime.specializedBodies!!.toMap()
                 val globals = parsed.keys.withIndex().associate { it.value to it.index }
                 val pending = ArrayDeque<Any>()

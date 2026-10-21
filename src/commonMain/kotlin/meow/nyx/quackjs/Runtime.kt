@@ -235,8 +235,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         } finally { calls-- }
     }
     private fun copyTemplate(value: Any?): Any? = when (value) {
-        is JsArray -> array(value.values.map(::copyTemplate))
-        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValues { copyTemplate(it.value) }.toMutableMap()) }
+        is JsArray -> { allocate(value.values.size); JsArray(MutableList(value.values.size) { copyTemplate(value.values[it]) }) }
+        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValuesTo(mutableMapOf()) { copyTemplate(it.value) }) }
         is JsFunction -> { allocate(1); JsFunction(value.code, global) }
         else -> value
     }
