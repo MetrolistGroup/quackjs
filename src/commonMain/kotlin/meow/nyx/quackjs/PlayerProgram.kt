@@ -138,7 +138,14 @@ private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, 
     fun execute(runtime: Runtime, input: String): Any? {
         runtime.challenge = input
         val root = makeRoot(runtime, constructor, mapKey, input, setter)
-        runtime.invoke(runtime.function(function), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
+        val args = arguments.map {
+            when {
+                it is Lit -> { runtime.tick(); it.value }
+                it === RootArgument -> { runtime.tick(); root }
+                else -> runtime.expression(it, mapOf(RootArgument.name to root))
+            }
+        }
+        runtime.invoke(runtime.function(function), if (selfRoot) root else Undefined, args)
         return (root.fields[mapKey] as? JsObject)?.fields?.get("n") ?: unsupported("n transform removed its result")
     }
 }
