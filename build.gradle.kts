@@ -1,16 +1,21 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     kotlin("multiplatform") version "2.4.20"
+    id("com.android.kotlin.multiplatform.library") version "9.4.1"
     `maven-publish`
 }
 group = "meow.nyx"
 version = "0.1.0-SNAPSHOT"
-// Any core source enables API compilation, so incomplete or broken declarations still fail after integration.
-val hasCoreSources = fileTree("src/commonMain/kotlin") { include("**/*.kt") }.files.isNotEmpty()
-if (!hasCoreSources) {
-    logger.lifecycle("Core sources are absent: JVM verification is oracle-only; Kotlin player parity is not checked.")
-}
 kotlin {
-    jvm()
+    android {
+        namespace = "meow.nyx.quackjs"
+        compileSdk = 37
+        minSdk = 23
+        compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
+        withHostTest {}
+    }
+    jvm { compilerOptions.jvmTarget.set(JvmTarget.JVM_17) }
     linuxX64()
     iosArm64()
     iosSimulatorArm64()
@@ -23,8 +28,7 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
             }
-            // Keep default JVM tests buildable before the separate core lane is integrated.
-            if (!hasCoreSources || providers.gradleProperty("oracleOnly").isPresent) {
+            if (providers.gradleProperty("oracleOnly").isPresent) {
                 kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt")
             }
         }
@@ -46,7 +50,6 @@ tasks.register<JavaExec>("playerBenchmark") {
     systemProperty("quackjs.fixtures", layout.projectDirectory.dir("fixtures").asFile.absolutePath)
     jvmArgs("-Xms512m", "-Xmx2g")
     doFirst {
-        check(hasCoreSources) { "playerBenchmark requires the pending commonMain core sources to be integrated" }
         check(!providers.gradleProperty("oracleOnly").isPresent) { "playerBenchmark requires the core, not -PoracleOnly" }
     }
 }

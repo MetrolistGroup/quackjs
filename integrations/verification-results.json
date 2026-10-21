@@ -1,0 +1,110 @@
+{
+  "capturedDateUtc": "2026-10-21",
+  "scope": "Local-only integration lane; originals read-only; no push or PR",
+  "environment": {
+    "host": "Linux x86_64",
+    "quackjsAndInnerTubeXJdk": "Temurin 21",
+    "metrolistJdk": "Temurin 25",
+    "quackjsAndInnerTubeXGradle": "9.8.0",
+    "metrolistGradle": "9.8.1",
+    "quackjsAndInnerTubeXKotlin": "2.4.20",
+    "androidPlugin": "com.android.kotlin.multiplatform.library:9.4.1",
+    "androidCompileSdk": 37,
+    "quackjsBytecodeMajor": 61
+  },
+  "checks": [
+    {
+      "directory": "QuackJS",
+      "command": "./gradlew jvmTest testAndroidHostTest assemble publishToMavenLocal --console=plain",
+      "result": "PASS",
+      "tests": { "jvmTest": 24, "testAndroidHostTest": 19, "failures": 0, "skipped": 0 },
+      "notes": "Includes full-player Kotlin parity and independent QuickJS oracle tests; Android/JVM/Linux/iOS publications generated. Apple tests are not executable on Linux.",
+      "log": "/tmp/quackjs-integration-logs/quackjs-build.log"
+    },
+    {
+      "directory": "QuackJS",
+      "command": "python3 integrations/verify-quackjs-publication.py",
+      "result": "PASS",
+      "notes": "All six module metadata files have stdlib-only direct dependencies; JVM JAR and Android classes.jar each contain 62 Java-17 classes, PlayerProgram API, and no JS/native cipher payload. Android publication is a real AAR."
+    },
+    {
+      "directory": "QuackJS",
+      "command": "./gradlew -I integrations/verify-runtime.init.gradle verifyCipherRuntime --no-configuration-cache --console=plain",
+      "result": "PASS",
+      "notes": "Resolved production androidRuntimeClasspath and jvmRuntimeClasspath contain no QuickJS components.",
+      "log": "/tmp/quackjs-integration-logs/quackjs-runtime.log"
+    },
+    {
+      "directory": "Private InnerTubeX snapshot",
+      "command": "./gradlew --no-daemon -PuseMavenLocalQuackJS -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT -I $Q/integrations/verify-runtime.init.gradle :verifyCipherRuntime desktopTest testAndroidHostTest ktlintCheck apiCheck assemble publishToMavenLocal :harness:test --no-configuration-cache --console=plain",
+      "result": "PASS",
+      "tests": { "desktopTest": 379, "testAndroidHostTest": 373, "harnessTest": 29, "failures": 0, "skipped": 0 },
+      "notes": "Public API baseline unchanged. Actual Maven Local Android AAR and JVM JAR dependency variants resolved; no JNI substitution. Existing iOS main and test sources compiled as part of assembly; no Apple execution.",
+      "log": "/tmp/quackjs-integration-logs/innertubex-final-3.log"
+    },
+    {
+      "directory": "Private InnerTubeX snapshot",
+      "command": "./gradlew --no-daemon -PuseMavenLocalQuackJS -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT testAndroidHostTest ktlintCheck --console=plain",
+      "result": "PASS",
+      "notes": "Reran after strengthening the AAR packaging test to inspect nested classes.jar as well as outer entries.",
+      "log": "/tmp/quackjs-integration-logs/innertubex-packaging-final.log"
+    },
+    {
+      "directory": "QuackJS",
+      "command": "./gradlew --no-daemon -p integrations/published-consumer test --console=plain",
+      "result": "PASS",
+      "tests": { "tests": 2, "failures": 0, "skipped": 0 },
+      "notes": "Only published Maven Local InnerTubeX/QuackJS artifacts. Four full players, both hinted and hint-free compilation, all 124 independent golden cases repeated in batches per mode, plus single signature/n helpers and one-download reuse. No source substitution or QuickJS dependency.",
+      "log": "/tmp/quackjs-integration-logs/published-consumer.log"
+    },
+    {
+      "directory": "Private Metrolist-KMP snapshot",
+      "command": "./gradlew --no-daemon -PuseMavenLocalInnerTubeX -PinnerTubeXVersion=v0.10.0-quackjs-SNAPSHOT -Pmetrolist.sourceRevision= -I $Q/integrations/verify-runtime.init.gradle :shared:verifyCipherRuntime :shared:desktopTest :shared:testAndroidHostTest :androidApp:assembleDebug :desktopApp:assemble --no-configuration-cache --console=plain",
+      "result": "PASS",
+      "tests": { "desktopTest": 1827, "desktopSkipped": 4, "testAndroidHostTest": 1226, "testServerWithoutReflection": 52, "failures": 0 },
+      "notes": "Four existing opt-in live-test skips; no test coverage disabled. Full debug APK and desktop assembly succeeded. Both Android and desktop resolved actual local InnerTubeX and transitive QuackJS variants.",
+      "log": "/tmp/quackjs-integration-logs/metrolist-full-3.log"
+    },
+    {
+      "directory": "Private Metrolist-KMP snapshot",
+      "command": "./gradlew -PuseMavenLocalInnerTubeX -PinnerTubeXVersion=v0.10.0-quackjs-SNAPSHOT -Pmetrolist.sourceRevision= :shared:dependencies --configuration desktopRuntimeClasspath :desktopApp:ktlintKotlinScriptCheck :shared:compileKotlinDesktop :shared:compileAndroidMain --console=plain",
+      "result": "PASS",
+      "log": "/tmp/quackjs-integration-logs/metrolist-build.log"
+    },
+    {
+      "directory": "Private Metrolist-KMP snapshot",
+      "command": "Python zipfile check of the assembled APK: reject quickjs/yt_ejs entry names and com/dokar/quickjs descriptors in every DEX",
+      "result": "PASS",
+      "artifact": "androidApp/build/outputs/apk/debug/androidApp-debug.apk",
+      "sha256": "6d1e7563971a69ea2e339eb3c4bd92644037f06154a6aba3318e3742deb7927f"
+    },
+    {
+      "directory": "QuackJS",
+      "command": "python3 -m unittest discover -s integrations -p 'test_*.py'",
+      "result": "PASS",
+      "tests": { "tests": 1, "failures": 0 },
+      "notes": "Dirty tracked contents, deleted/untracked files, secret exclusions, source preservation, destination protection and hash mismatch checks. Real Metrolist snapshot additionally exercised recursive initialized-submodule capture."
+    },
+    {
+      "directory": "Fresh private baseline copies",
+      "command": "git apply --check --index <patch>; git apply --index <patch>; compare git write-tree with tested migration",
+      "result": "PASS",
+      "notes": "Both final patches recreate the tested staged trees exactly; see application-results.json for patch digests and trees."
+    }
+  ],
+  "retryNotes": [
+    "Initial formatting found correctable Kotlin style issues; fixed without changing meaningful coverage.",
+    "An unqualified init-task selector also invoked the unrelated harness task; qualified :verifyCipherRuntime resolved the intended configurations.",
+    "Two shared Gradle daemons received external stop commands. Commands were rerun with --no-daemon.",
+    "One Metrolist test run reported missing InnerTubeX classes while the same Maven Local snapshot was being republished concurrently. With publication finished, the full ordered rerun passed unchanged; do not republish snapshot JARs during consuming JVM tests."
+  ],
+  "notChecked": [
+    "Live authenticated or signed-out YouTube playback",
+    "Android device/emulator execution",
+    "Apple simulator/device execution or final framework linking",
+    "Desktop release ProGuard/distributable packaging",
+    "Remote publication",
+    "APK-size or performance claims",
+    "Separate core worker's final changes after integration: republish and rerun these commands on the combined branch"
+  ]
+}
