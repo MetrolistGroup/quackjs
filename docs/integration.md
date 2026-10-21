@@ -1,6 +1,6 @@
 # Local QuickJS-free consumer integration
 
-All changes and publications are local. The original `/mnt/work/projects/innertubex` and `/mnt/work/projects/Metrolist-KMP` were read, never edited or committed. Patches were made and tested in private tracked-file copies, not against a clean upstream checkout.
+The QuackJS source is published at [nyxiereal/quackjs](https://github.com/nyxiereal/quackjs). Consumer changes and Maven artifact publications described here remain local. The original `/mnt/work/projects/innertubex` and `/mnt/work/projects/Metrolist-KMP` were read, never edited or committed. Patches were made and tested in private tracked-file copies, not against a clean upstream checkout.
 
 ## Deliverables and exact baselines
 

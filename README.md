@@ -1,5 +1,8 @@
 # QuackJS
 
+Source: [nyxiereal/quackjs](https://github.com/nyxiereal/quackjs).
+Licensed under [GPL-3.0-only](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md).
+
 Kotlin-only YouTube player signature deciphering and `n` transforms. No QuickJS,
 JNI, WebView, JavaScript engine, network client, or production dependency beyond
 Kotlin stdlib.
