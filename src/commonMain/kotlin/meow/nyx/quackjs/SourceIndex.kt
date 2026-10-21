@@ -89,9 +89,11 @@ internal class SourceIndex(val source: String, className: String) {
         names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
         val writes = found.filter { it.braces == rootBraces }
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
-        val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).toMutableSet()
-        // An object passed to initialization code can be mutated even when the callee is Object.assign.
-        for ((offset, depth) in callArguments) if (depth == rootBraces) sharedMutations.addAll(argumentReferences(offset))
+        val primitives = mutableMapOf<String, Boolean>()
+        fun canMutate(name: String): Boolean = !primitiveDefinition(name, primitives)
+        val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).filter(::canMutate).toMutableSet()
+        // Calls can mutate reference values, but cannot mutate a primitive or its copied aliases.
+        for ((offset, depth) in callArguments) if (depth == rootBraces) argumentReferences(offset).filterTo(sharedMutations, ::canMutate)
         val aliases = mutableMapOf<String, MutableSet<String>>()
         for (write in writes) {
             if (write.lhs.size != 1) continue
@@ -106,10 +108,42 @@ internal class SourceIndex(val source: String, className: String) {
         }
         val queue = ArrayDeque(sharedMutations)
         while (queue.isNotEmpty()) {
-            for (alias in aliases[queue.removeFirst()].orEmpty()) if (sharedMutations.add(alias)) queue.addLast(alias)
+            for (alias in aliases[queue.removeFirst()].orEmpty()) if (canMutate(alias) && sharedMutations.add(alias)) queue.addLast(alias)
         }
         mutatedObjects = sharedMutations + updates.filter { it.second == rootBraces }.map { it.first }
         timestamps = stamps
+    }
+
+    /** Prove immutable initializer results without executing unrelated player code. */
+    private fun primitiveDefinition(name: String, known: MutableMap<String, Boolean>, resolving: MutableSet<String> = mutableSetOf()): Boolean {
+        known[name]?.let { return it }
+        if (resolving.size >= 64 || !resolving.add(name)) return false
+        try {
+            fun primitive(expr: Expr): Boolean = when (expr) {
+                is Lit -> expr.value == null || expr.value is String || expr.value is Double || expr.value is Boolean
+                is Id -> primitiveDefinition(expr.name, known, resolving)
+                is Unary -> expr.op in setOf("!", "~", "+", "-", "typeof", "void", "delete")
+                is Binary -> when (expr.op) {
+                    "=", "," -> primitive(expr.right)
+                    "&&", "||", "??" -> primitive(expr.left) && primitive(expr.right)
+                    else -> true
+                }
+                is Conditional -> primitive(expr.yes) && primitive(expr.no)
+                else -> false
+            }
+            val entries = names[name]
+            val result = if (entries == null) name in setOf("undefined", "NaN", "Infinity")
+            else if (entries.size != 1 || writeCounts[name] != 1) false
+            else {
+                val offset = entries.single().offset
+                val first = Lexer(source, offset).next()
+                if (first.kind == 0 && first.text in setOf("function", "{", "[")) false
+                else try { primitive(parseAt(offset)) } catch (_: UnsupportedPlayerException) { false }
+            }
+            // A budget cut in a longer alias chain must not poison a shorter proof.
+            if (result || resolving.size == 1) known[name] = result
+            return result
+        } finally { resolving.remove(name) }
     }
 
     private fun argumentReferences(offset: Int, closing: String = ")", opening: String = "("): Set<String> {

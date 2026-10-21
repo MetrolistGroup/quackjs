@@ -138,6 +138,30 @@ class PlayerProgramTest {
         assertEquals("cb", PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
     }
 
+    @Test fun callsCannotMutatePrimitiveGlobalsOrTheirCopies() {
+        for ((initializer, suffix) in listOf(
+            "1" to "1", "(1<<2)-3" to "1", "true?1:2" to "1",
+            "true" to "true", "'value'" to "value", "null" to "null", "void 0" to "undefined",
+        )) {
+            val p = compile("return x+key;", extra = "var key=$initializer;var unused=Math.floor(key);")
+            assertEquals("abc$suffix", p.decipherSignature("abc"), initializer)
+        }
+        for (extra in listOf(
+            "var key=1;var alias=((key));var unused=Math.floor(alias);",
+            "var key=1;var helper={key:key};Object.assign(helper,{key:2});",
+        )) assertEquals("abc1", compile("return x+key;", extra = extra).decipherSignature("abc"))
+        assertEquals("abc1", compile("return helper.f(x)+key;", extra = "var key=1;var helper={key:key,f:function(x){return x}};var unused=Math.floor(key);").decipherSignature("abc"))
+        assertEquals("abcvalue", compile("return x+key;", extra = "var key='value';var unused=key.charAt(0);").decipherSignature("abc"))
+        val chain = (1..100).joinToString("") { "var alias$it=alias${it - 1};" }
+        assertEquals("abc1", compile("return x+alias50;", extra = "var key=1;var alias0=key;${chain}var unused=Math.floor(alias100);").decipherSignature("abc"))
+        for (write in listOf("key++", "key+=1", "key=2")) {
+            assertFailsWith<UnsupportedPlayerException>(write) { compile("return x+key;", extra = "var key=1;var unused=Math.floor(key);$write;") }
+        }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return helper.f(x);", extra = "var helper=factory();var factory=function(){return {f:function(x){return x}}};Object.assign(helper,{f:function(x){return 'changed'}});")
+        }
+    }
+
     @Test fun externalCallsCannotSilentlyMutateDependencies() {
         val signature = "return helper.f(x);"
         val helper = "var helper={f:function(x){return x;}};"
