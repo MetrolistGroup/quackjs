@@ -218,18 +218,35 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             runtime.exec(stmt, env)
             prefix.add(stmt)
         }
+        val rootNames = bindings.filterValues { it == RootArgument }.keys.toSet()
         val dynamic = bindings.filterValues(::dependsOnRoot).keys.toMutableSet()
+        fun rootArgument(expr: Expr): Boolean = when (expr) {
+            is Id -> expr.name in rootNames
+            is Conditional -> rootArgument(expr.yes) || rootArgument(expr.no)
+            is Binary -> if (expr.op in setOf("&&", "||", "??")) rootArgument(expr.left) || rootArgument(expr.right) else expr.op in setOf(",", "=") && rootArgument(expr.right)
+            is ArrayExpr -> expr.items.any(::rootArgument)
+            is ObjectExpr -> expr.items.any { rootArgument(it.second) }
+            is Call -> expr.args.any(::rootArgument)
+            else -> false
+        }
         var rootWrite = false
-        // Follow reachable dispatcher branches, but never reuse a binding after a possible write.
+        var unresolvedRootCalls = 0
+        val discovered = mutableListOf<Candidate>()
+        // Invalidate bindings in order; a later write must not change an earlier call site.
         walk(candidate.function.body, runtime, env, dynamic, write = { target ->
             if (target is Id) { bindings.remove(target.name); dynamic.add(target.name) }
             else if (target is Member && substitute(target, bindings, env) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
-        }, prefix = prefix) { _, _ -> }
-        if (rootWrite) continue
-        walk(candidate.function.body, runtime, env, dynamic) { call, guards ->
+        }, prefix = prefix) { call, guards ->
             var target = call.fn
             var selfRoot = false
             var argExprs = call.args
+            if (discovered.isNotEmpty() && target is Member && rootArgument(target.target)) {
+                unresolvedRootCalls++
+                return@walk
+            }
+            if (target !is Id && !(target is Member && target.target is Id && target.key in setOf(Lit("call"), Lit("apply")))) return@walk
+            val rootTail = discovered.isNotEmpty() && argExprs.any(::rootArgument)
+            if (rootTail) unresolvedRootCalls++
             if (target is Member && target.key == Lit("call") && target.target is Id && argExprs.isNotEmpty()) {
                 if (!constant(argExprs.first())) return@walk
                 val self = substitute(argExprs.first(), bindings, env) ?: return@walk
@@ -237,11 +254,15 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
                 selfRoot = self == RootArgument
                 argExprs = argExprs.drop(1); target = target.target
             }
-            if (target !is Id || call.construct || !argExprs.all(::constant)) return@walk
+            if (target !is Id || call.construct) return@walk
+            if (!argExprs.all(::constant)) return@walk
             val boundArgs = argExprs.map { substitute(it, bindings, env) ?: return@walk }
             boundArgs.forEach(::validateDepth)
             val values = try { nArguments(runtime, boundArgs, cleanRoot) } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
-            if (!selfRoot && values.none { it === cleanRoot }) return@walk
+            if (!selfRoot && values.none { it === cleanRoot }) {
+                if (rootTail && values.all { it is Double || it is String || it is Boolean || it === Undefined || it == null }) unresolvedRootCalls--
+                return@walk
+            }
             if (values.any { it !== cleanRoot && it !is Double && it !is String && it !is Boolean && it !== Undefined && it != null }) return@walk
             val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
             if (fn !is JsFunction) return@walk
@@ -253,9 +274,12 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
                     return@walk
                 }
             }
-            if (pending.size >= 64) unsupported("n discovery dependency limit exceeded")
-            pending.add(Candidate(fn.code, boundArgs, selfRoot, candidate.level + 1, target.name))
+            if (pending.size + discovered.size >= 64) unsupported("n discovery dependency limit exceeded")
+            discovered.add(Candidate(fn.code, boundArgs, selfRoot, candidate.level + 1, target.name))
+            if (rootTail) unresolvedRootCalls--
         }
+        // An unbound or guarded second root call may overwrite an earlier helper's result.
+        if (!rootWrite && unresolvedRootCalls == 0) pending.addAll(discovered)
     }
     return selected?.second ?: unsupported("Cannot isolate n transform: $lastError")
 }
@@ -377,7 +401,8 @@ private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, g
         is Loop -> {
             stmt.init?.let { child(it) }; stmt.test?.let { expr(it) }
             val known = stmt.test?.let { knownTruth(it, runtime, env, dynamic) }
-            val path = if (stmt.test != null && known == null) guards + stmt.test else guards
+            // Isolating one call cannot preserve a loop's iteration count or loop-carried writes.
+            val path = guards + if (stmt.test != null && known == null) stmt.test else RootArgument
             stmt.update?.let { expr(it, path) }
             if (stmt.test == null || known != false) {
                 val body = child(stmt.body, path)

@@ -138,6 +138,73 @@ class PlayerProgramTest {
         assertEquals("cb", PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
     }
 
+    @Test fun nIsolationUsesBindingsAtEachCallSite() {
+        val extra = "var rootN=function(o,v){o.set('n',v.split('').reverse().join(''));};"
+        for (body in listOf(
+            "var flag=1;if(flag)rootN(this,this.V.n);flag=2;",
+            "var flag=1;flag&&rootN(this,this.V.n);flag=2;",
+            "var flag=1;flag?rootN(this,this.V.n):null;flag=2;",
+            "var v=this.V.n;rootN(this,v);v='later';",
+        )) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
+            val program = PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345))
+            for (input in listOf("abc", "", "another-challenge")) assertEquals(input.reversed(), program.transformN(input), body)
+        }
+        for (body in listOf(
+            "var flag=0;if(flag)rootN(this,this.V.n);flag=1;",
+            "var flag=1;flag=0;if(flag)rootN(this,this.V.n);",
+            "rootN(this,this.V.n);this.V.n='later';",
+            "var v=this.V.n;if(v.length>10)rootN(this,v);v='later';",
+            "var v=this.V.n,i=0;while(true){rootN(this,v);v='changed';if(i++>0)break;}",
+            "var i=0;while(true){rootN(this,this.V.n);if(i++>0)break;}",
+            "var v=this.V.n;rootN(this,v);v='changed';rootN(this,v);",
+            "rootN(this,this.V.n);rootN(this,this.V.n.slice(1));",
+            "rootN(this,this.V.n);if(this.V.n.length>10)rootN(this,this.V.n);",
+            "var v=this.V.n;rootN(this,v);v='changed';rootN.call(null,this,v);",
+            "var v=this.V.n;rootN(this,v);v='changed';rootN.apply(null,[this,v]);",
+            "var flag=1;if(flag)rootN(this,this.V.n);flag=2;this.set('n','later');",
+        )) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
+            assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+        }
+    }
+
+    @Test fun primitivePropertyArgumentsDoNotEscapeTheirOwners() {
+        val letters = "var letters='a;b'.split(';');"
+        for (call in listOf(
+            "Math.floor(letters.length)",
+            "unknown(letters.length)",
+            "unknown(letters['length'])",
+            "unknown(alias.length)",
+            "unknown([letters.length])",
+        )) assertEquals("aabc", compile("return letters[0]+x;", extra = letters + "var alias=letters;Array.isArray(letters);var unused=$call;").decipherSignature("abc"), call)
+        for (extra in listOf(
+            "var letters=['a','b'];unknown(letters.length);",
+            "var letters='a;b'.split(';');var size=letters.length;unknown(size);",
+            "var letters='a;b'.split(';');var wrapper=[letters.length];unknown(wrapper);",
+        )) assertEquals("aabc", compile("return letters[0]+x;", extra = extra).decipherSignature("abc"))
+        for (mutation in listOf(
+            "unknown(letters.length,letters)",
+            "unknown(letters[0])",
+            "unknown(letters.length||letters)",
+        )) assertFailsWith<UnsupportedPlayerException>(mutation) {
+            compile("return letters[0]+x;", extra = letters + "$mutation;")
+        }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return helper.length[0]+x;", extra = "var helper={length:['a']};unknown(helper.length);")
+        }
+        for (override in listOf(
+            "String.prototype.split=function(){return {length:[]}};",
+            "var Native=String;Native.prototype.split=function(){return {length:[]}};",
+            "var proto=String.prototype;proto.split=function(){return {length:[]}};",
+            "unknown(String);",
+        )) for (argument in listOf("letters.length", "size", "[letters.length]", "wrapper")) {
+            assertFailsWith<UnsupportedPlayerException>("$override $argument") {
+                compile("return letters[0]+x;", extra = override + letters + "var size=letters.length,wrapper=[letters.length];unknown($argument);")
+            }
+        }
+    }
+
     @Test fun callsCannotMutatePrimitiveGlobalsOrTheirCopies() {
         for ((initializer, suffix) in listOf(
             "1" to "1", "(1<<2)-3" to "1", "true?1:2" to "1",
