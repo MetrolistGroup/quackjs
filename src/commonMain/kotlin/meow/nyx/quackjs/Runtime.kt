@@ -409,6 +409,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
     val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
     val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
+    private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
         return when (name) {
             "reverse" -> Native { r, self, _ -> val target = self as? JsArray ?: unsupported("Unsupported array method receiver"); r.tick(target.values.size); target.values.reverse(); target }
@@ -483,6 +484,21 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
             val limit = if (a.size < 2 || a[1] === Undefined) 4_294_967_295L else r.uint(a[1])
             val sep = a.firstOrNull()
+            val separator = if (limit > 0 && a.isNotEmpty() && sep !== Undefined) text(sep) else null
+            if (separator == "") {
+                val size = minOf(value.length.toLong(), limit).toInt()
+                if (size > 65_536) unsupported("Array size limit exceeded")
+                val parts = MutableList<Any?>(size) { i ->
+                    r.tick(2)
+                    if (value.length == 1) value else {
+                        r.allocate(1)
+                        val char = value[i]
+                        if (char.code < latin1Characters.size) latin1Characters[char.code] else char.toString()
+                    }
+                }
+                r.allocate(size)
+                return@Native JsArray(parts)
+            }
             val parts = mutableListOf<Any?>()
             fun addPart(start: Int, end: Int) {
                 r.tick(end - start + 1)
@@ -491,13 +507,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 else { r.allocate(end - start); parts.add(value.substring(start, end)) }
             }
             if (limit > 0) {
-                if (a.isEmpty() || sep === Undefined) addPart(0, value.length)
+                if (separator == null) addPart(0, value.length)
                 else {
-                    val separator = text(sep)
                     var start = 0
-                    if (separator.isEmpty()) {
-                        while (start < value.length && parts.size.toLong() < limit) { addPart(start, start + 1); start++ }
-                    } else while (parts.size.toLong() < limit) {
+                    while (parts.size.toLong() < limit) {
                         val end = r.find(value, separator, start)
                         if (end < 0) { addPart(start, value.length); break }
                         addPart(start, end)
@@ -505,7 +518,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     }
                 }
             }
-            r.array(parts)
+            r.allocate(parts.size)
+            JsArray(parts)
         }
         "slice", "substring", "substr" -> Native { r, self, a ->
             val value = stringReceiver(self)
