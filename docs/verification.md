@@ -167,17 +167,25 @@ were added.
 
 ## Final combined verification
 
-After integrating and fixing the final empty/sparse `forEach` frame regression:
+After selecting ten implementation patches from the [32-lane experiment](performance-lanes/summary.md), final core `25e10da`:
 
-- `./gradlew --no-daemon jvmTest testAndroidHostTest linuxX64Test assemble publishToMavenLocal --console=plain`: passed, 49 JVM, 43 Android-host and 43 Linux tests, no skips/failures. Log `/tmp/quackjs-combined-tests.log`.
-- `node scripts/player-oracle.mjs`: passed, all 124 goldens, hashes and fresh-context repetitions.
-- `python3 integrations/verify-quackjs-publication.py`: passed, six stdlib-only KMP publications; 71 Java-17 classes in JVM/Android artifacts, no JS/native payload.
-- Production runtime graph check: passed, no QuickJS on Android/JVM (`/tmp/quackjs-combined-runtime.log`).
-- Two complete benchmark executions: passed parity and timed-output checks. [Results](benchmark.md) include both runs, including the warm regression.
-- The exact final six-file core was synchronized into the isolated InnerTubeX module and verified by SHA-256. The generated API baseline changed only for the private constructor's synthetic JVM bridge; the public Kotlin API and InnerTubeX API stayed unchanged.
-- InnerTubeX desktop/Android-host/harness tests, formatting, API checks, assembly and local publication passed. Its invocation-count regression test was updated to observe lazy function resolution rather than the removed per-call map copy. Log `/tmp/quackjs-combined-innertubex.log`.
-- Published-artifact consumer passed all four players with and without hints (`/tmp/quackjs-combined-consumer.log`).
-- Metrolist shared desktop/Android-host tests, Android debug APK and desktop assembly passed against the final local publication (`/tmp/quackjs-combined-metrolist.log`).
+- `./gradlew --no-daemon --max-workers=2 jvmTest testAndroidHostTest linuxX64Test --console=plain`: passed, **111 JVM, 103 Android-host and 103 Linux tests**, no skips/failures. Log `/tmp/quackjs-perf32/combined-tests.log`.
+- `node scripts/player-oracle.mjs`: passed, all 124 existing goldens, hashes and fresh-context repetitions. No fixture expectations were changed.
+- The new JVM acceptance test also checks **112 unseen seeded valid challenges** against full-player QuickJS, repeated/reverse order, and shared-program concurrency. Malformed n comparisons remain diagnostic because the oracle uses a URL wrapper; they are not reported as parity passes.
+- `./gradlew --no-daemon --max-workers=2 assemble publishToMavenLocal --console=plain` and `python3 integrations/verify-quackjs-publication.py`: passed, six stdlib-only KMP publications; 72 Java-17 classes in JVM/Android artifacts, no JS/native payload. Log `/tmp/quackjs-perf32/combined-publication.log`.
+- Two complete original benchmark executions plus the per-kind timing/allocation harness passed all output checks. The unchanged core was benchmarked before and after the candidate runs. [Results](benchmark.md) record both versions and preserve the older warm regression as historical evidence.
+- The opt-in optimized Native extract workload passed twice; its timing differences do not establish a reliable Native speedup.
+- A read-only review of the combined patch against `732ee13` found no actionable regressions. Log `/tmp/quackjs-perf32/combined-review.log`.
+- The exact final **seven-file core** was synchronized into the isolated InnerTubeX module and verified by SHA-256. The public Kotlin API and InnerTubeX API stayed unchanged; existing API checks pass without a new baseline change in this round.
+- InnerTubeX: 382 desktop, 375 Android-host and 29 harness tests, formatting, API checks, assembly and local publication passed; production graph contains no QuickJS. Log `/tmp/quackjs-perf32/combined-innertubex.log`.
+- Published-artifact consumer passed all four players with and without hints (`/tmp/quackjs-perf32/combined-consumer.log`).
+- Metrolist: 1,827 shared desktop tests (four existing opt-in skips), 1,226 Android-host tests and 52 server tests passed; Android debug APK and desktop assembly passed against the final local publication. Selected runtime graph and APK/DEX checks show no QuickJS/EJS payload. Log `/tmp/quackjs-perf32/combined-metrolist.log`.
+- The regenerated InnerTubeX patch was applied to a fresh verified baseline copy; its staged tree exactly matched the tested migration. Proof digests are in `integrations/application-results.json`.
+
+All heavy builds/benchmarks used the shared validation lock. Original implementation
+logs remain under `/tmp/quackjs-combined-*.log`; this round's logs are under
+`/tmp/quackjs-perf32/`. Machine-readable final counts and limitations are in
+[`integrations/final-verification.json`](../integrations/final-verification.json).
 
 See [integration instructions](integration.md) for exact consumer commands and
 snapshot safety. These builds are not live CDN/device tests. Apple sources and

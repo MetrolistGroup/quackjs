@@ -76,12 +76,15 @@ applying the snapshot-specific patches.
   Node/QuickJS golden cases**, hinted and hint-free consumer tests, and concurrency
   tests. This is a dispatcher/table-player subset, **not general JavaScript** or
   a guarantee for every historical/future player.
-- 49 JVM, 43 Android-host and 43 Linux Native library tests pass.
+- 111 JVM, 103 Android-host and 103 Linux Native library tests pass, including
+  112 additional unseen challenges checked against QuickJS.
 - Migrated InnerTubeX: 382 desktop, 375 Android-host and 29 harness tests pass.
   Metrolist shared tests, Android debug APK and desktop assembly pass.
-- Two local JVM benchmark runs: cold compile + first signature/n is **2.0–2.3×
-  faster** than full-player QuickJS. Warm batches are near parity: 6% slower to
-  21% faster depending on player/run. There is **no universal warm-speed win**.
+- After the [32-lane optimization round](docs/performance-lanes/summary.md), two
+  JVM runs show **2.3–2.5× faster cold preparation** and **20–27% lower warm-batch
+  latency than QuickJS** on all four players. Warm latency is 13–21% lower than
+  the previous core; measured JVM allocation falls 56% for signatures and 41%
+  for n transforms. These are corpus-specific results, not a universal guarantee.
 
 See [verification and benchmark methodology](docs/verification.md) and
 [measured results](docs/benchmark.md). QuickJS is a test-only oracle dependency.
@@ -90,6 +93,7 @@ See [verification and benchmark methodology](docs/verification.md) and
 ./gradlew jvmTest testAndroidHostTest linuxX64Test
 node scripts/player-oracle.mjs
 ./gradlew playerBenchmark --console=plain
+./gradlew lane32AcceptanceBenchmark --console=plain
 ```
 
 Limits include 8 Mi UTF-16 source units, 16,384-unit challenges, 65,536-unit output

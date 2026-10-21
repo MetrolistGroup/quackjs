@@ -129,20 +129,21 @@ index 44c58e7..4e4a47b 100644
  android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "androidGradlePlugin" }
 diff --git a/quackjs/UPSTREAM.json b/quackjs/UPSTREAM.json
 new file mode 100644
-index 0000000..89f929b
+index 0000000..905c61a
 --- /dev/null
 +++ b/quackjs/UPSTREAM.json
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,13 @@
 +{
 +  "source": "QuackJS local source snapshot; no remote release is assumed",
-+  "sourceCommit": "a7e66f575e253c7655176724ebdb9123aaf376e6",
++  "sourceCommit": "25e10da2ffa0e0a3fe630ea9ce7721a56608205d",
 +  "sha256": {
++    "src/commonMain/kotlin/meow/nyx/quackjs/HotCharacterPlan.kt": "0bb6b7850d1b66a648395a39840cf148fcb2626fb469b52240daf1f14c0f5b42",
 +    "src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt": "251ef4e9ef604122c25edc9a29bb2aca31b19f5b366a7d8029294a4a93a71c07",
-+    "src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt": "6537b2bf3768d21bb04c82b74bccdf8b0f3df43f7c427c1bda43f963e9794aa2",
-+    "src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt": "7251018d69a0f11af2b4fbd5ec779668fdb77f012142ea6b15809f09efac77a6",
-+    "src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt": "c9c836b73de675347ded93d9cd5ca595c7f7ef6e04c163e5902fe81b9aeb8eed",
++    "src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt": "961a0ddc333fdcb30f4ea60c4c0e39b4dfedf060dfe7225006245dd48f5c2163",
++    "src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt": "4f965377b36b05254c4540077487f3be3974fea90a59c633d4f9f4c367e43ce0",
++    "src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt": "6ffad3a6c81f0f8216dc18576a8f69c53691fffa8878c0cb9678021a073f46d3",
 +    "src/commonMain/kotlin/meow/nyx/quackjs/Specialization.kt": "e74bf3896cceafa91a78ecbb51bc0508a8259a1e5bc71ca25122a0b70be87d89",
-+    "src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt": "b51b4f09e14ffc6aa74a3a9e6008809ce75f43abac437a0729f1cf3346e284ae"
++    "src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt": "ae3591e1434af2b9849499f2506293a00a25dfdaa570d4ada17a379c038c7122"
 +  }
 +}
 diff --git a/quackjs/api/desktop/quackjs.api b/quackjs/api/desktop/quackjs.api
@@ -212,6 +213,115 @@ index 0000000..f54d908
 +    iosSimulatorArm64()
 +    jvmToolchain(21)
 +}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/HotCharacterPlan.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/HotCharacterPlan.kt
+new file mode 100644
+index 0000000..7423314
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/HotCharacterPlan.kt
+@@ -0,0 +1,103 @@
++package meow.nyx.quackjs
++
++/** A single table-remapping callback shape, with live bindings and built-in-only calls. */
++internal class HotCharacterPlan private constructor(
++    private val code: FunctionExpr,
++    private val table: Id,
++    private val counter: Id,
++    private val pushKey: Expr,
++    private val indexKey: Expr,
++    private val lengthKey: Expr,
++) {
++    private val steps = 25 + keySteps(pushKey) + 2 * keySteps(indexKey) + keySteps(lengthKey)
++
++    fun execute(runtime: Runtime, env: Env): Boolean {
++        fun read(id: Id): Any? = env.owner(id.name)?.get(id.name)
++        val alphabet = read(table) as? JsArray ?: return false
++        val owner = env.owner(counter.name) ?: return false
++        val remaining = owner[counter.name] as? Double ?: return false
++        val self = env.slots[code.thisSlot] as? JsArray ?: return false
++        val value = env.slots[code.parameterSlots[0]] as? String ?: return false
++        val position = env.slots[code.parameterSlots[1]] as? Double ?: return false
++        val target = env.slots[code.parameterSlots[2]] as? JsArray ?: return false
++        if (value.length != 1 || position < 0 || position >= target.values.size || position != position.toInt().toDouble()) return false
++        if (key(pushKey, env) != "push" || key(indexKey, env) != "indexOf" || key(lengthKey, env) != "length") return false
++        if (self.fields.containsKey("push") || alphabet.fields.containsKey("indexOf")) return false
++
++        // Charge the omitted statements/expressions; properties and native calls still charge normally.
++        runtime.tick(steps)
++        val push = runtime.get(self, "push")
++        val first = runtime.invoke(runtime.get(alphabet, "indexOf"), alphabet, listOf(value)) as Double
++        val second = runtime.invoke(runtime.get(alphabet, "indexOf"), alphabet, listOf(runtime.property(self, position))) as Double
++        owner[counter.name] = remaining - 1
++        val length = runtime.get(alphabet, "length") as Double
++        val result = runtime.property(alphabet, (first - second + position + remaining) % length)
++        // Array reads precede both array writes, including aliased receivers.
++        target.values[position.toInt()] = result
++        runtime.invoke(push, self, listOf(result))
++        return true
++    }
++
++    companion object {
++        fun compile(code: FunctionExpr): HotCharacterPlan? {
++            if (code.params.size != 3 || code.params.distinct().size != 3 || code.params.any { it == "this" || it == "arguments" || it == code.name }) return null
++            val body = (code.body.statements.singleOrNull() as? ExpressionStmt)?.expr as? Call ?: return null
++            if (body.construct || body.args.size != 1) return null
++            val push = body.fn as? Member ?: return null
++            if (push.target != Id("this")) return null
++            val assignment = body.args.single() as? Binary ?: return null
++            if (assignment.op != "=" || assignment.left != Member(Id(code.params[2]), Id(code.params[1]))) return null
++            val lookup = assignment.right as? Member ?: return null
++            val table = lookup.target as? Id ?: return null
++            if (table.slot >= 0 || table.name == "this") return null
++            val modulo = lookup.key as? Binary ?: return null
++            if (modulo.op != "%") return null
++            val length = modulo.right as? Member ?: return null
++            if (length.target != table) return null
++            val sum = modulo.left as? Binary ?: return null
++            if (sum.op != "+") return null
++            val decrement = sum.right as? Update ?: return null
++            if (decrement.op != "--" || decrement.prefix) return null
++            val counter = decrement.target as? Id ?: return null
++            if (counter.slot >= 0 || counter.name == "this") return null
++            val offset = sum.left as? Binary ?: return null
++            if (offset.op != "+" || offset.right != Id(code.params[1])) return null
++            val difference = offset.left as? Binary ?: return null
++            if (difference.op != "-") return null
++            val first = difference.left as? Call ?: return null
++            val second = difference.right as? Call ?: return null
++            if (first.construct || second.construct || first.args != listOf(Id(code.params[0])) || second.args != listOf(Member(Id("this"), Id(code.params[1])))) return null
++            val index = first.fn as? Member ?: return null
++            if (index.target != table || second.fn != index) return null
++            // The only omitted key expressions are primitive reads; none may observe the counter write.
++            if (!listOf(push.key, index.key, length.key).all { supportedKey(it, counter.name) }) return null
++            return HotCharacterPlan(code, table, counter, push.key, index.key, length.key)
++        }
++
++        private fun supportedKey(expr: Expr, counter: String): Boolean {
++            if (expr is Lit) return expr.value is String
++            if (expr !is Member || expr.target !is Id || expr.target.name == counter) return false
++            val index = expr.key
++            if (index is Lit) return index.value is Double
++            return index is Binary && index.op == "^" && index.left is Id && index.left.name != counter && index.right is Lit && index.right.value is Double
++        }
++
++        private fun keySteps(expr: Expr): Int = if (expr is Lit) 1 else if ((expr as Member).key is Lit) 4 else 6
++
++        // A guard never resolves globals, coerces objects, calls code, charges work, or changes state.
++        private fun key(expr: Expr, env: Env): String? {
++            if (expr is Lit) return expr.value as? String
++            val member = expr as Member
++            val table = env.owner((member.target as Id).name)?.get(member.target.name) as? JsArray ?: return null
++            val index = member.key
++            val number = if (index is Lit) index.value as Double else {
++                index as Binary
++                val id = index.left as Id
++                val value = env.owner(id.name)?.get(id.name) as? Double ?: return null
++                (int(value) xor int((index.right as Lit).value)).toDouble()
++            }
++            if (number < 0 || number >= table.values.size || number != number.toInt().toDouble()) return null
++            return table.values[number.toInt()] as? String
++        }
++    }
++}
 diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt
 new file mode 100644
 index 0000000..134fd26
@@ -234,10 +344,10 @@ index 0000000..134fd26
 +}
 diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt
 new file mode 100644
-index 0000000..6cf9cb4
+index 0000000..5e0cf87
 --- /dev/null
 +++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt
-@@ -0,0 +1,473 @@
+@@ -0,0 +1,482 @@
 +package meow.nyx.quackjs
 +
 +/** Optional, externally supplied landmarks from a known player configuration. */
@@ -294,7 +404,9 @@ index 0000000..6cf9cb4
 +                if (result !is String) unsupported("Signature transform did not return a string")
 +                val parsed = runtime.definitions.toMap()
 +                val initializer = Runtime(source)
-+                val templates = parsed.filterValues(::templateSafe).mapValues { initializer.expression(it.value) }
++                val templates = buildMap {
++                    for ((name, expr) in parsed) if (templateSafe(expr)) put(name, initializer.expression(expr))
++                }
 +                val dispatch = runtime.specializedBodies!!.toMap()
 +                val globals = parsed.keys.withIndex().associate { it.value to it.index }
 +                val pending = ArrayDeque<Any>()
@@ -376,7 +488,14 @@ index 0000000..6cf9cb4
 +    fun execute(runtime: Runtime, input: String): Any? {
 +        runtime.challenge = input
 +        val root = makeRoot(runtime, constructor, mapKey, input, setter)
-+        runtime.invoke(runtime.function(function), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
++        val args = arguments.map {
++            when {
++                it is Lit -> { runtime.tick(); it.value }
++                it === RootArgument -> { runtime.tick(); root }
++                else -> runtime.expression(it, mapOf(RootArgument.name to root))
++            }
++        }
++        runtime.invoke(runtime.function(function), if (selfRoot) root else Undefined, args)
 +        return (root.fields[mapKey] as? JsObject)?.fields?.get("n") ?: unsupported("n transform removed its result")
 +    }
 +}
@@ -713,10 +832,10 @@ index 0000000..6cf9cb4
 +}
 diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt
 new file mode 100644
-index 0000000..c0db0e4
+index 0000000..c280d55
 --- /dev/null
 +++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt
-@@ -0,0 +1,630 @@
+@@ -0,0 +1,690 @@
 +package meow.nyx.quackjs
 +
 +import kotlin.math.abs
@@ -732,8 +851,7 @@ index 0000000..c0db0e4
 +internal class Native(val fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val invoke: (Runtime, Any?, List<Any?>) -> Any?)
 +internal class JsDate(val time: Double)
 +internal class JsThrown(val value: Any?) : Exception()
-+private class Returned(val value: Any?)
-+private class Reference(val read: () -> Any?, val write: (Any?) -> Unit)
++private data object ReturnedNull
 +internal class Env(val parent: Env? = null, private val names: Map<String, Int>? = null) {
 +    private var entries: MutableMap<String, Any?>? = null
 +    var revision: Int = 0
@@ -767,6 +885,7 @@ index 0000000..c0db0e4
 +        if (allocated > 2_000_000) unsupported("Allocation limit exceeded")
 +    }
 +    fun array(items: List<Any?>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
++    private fun arrayRange(items: List<Any?>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
 +    fun string(value: String): String { allocate(value.length); return value }
 +    private fun number(value: Any?): Double { if (value is String) tick(value.length); return meow.nyx.quackjs.number(value) }
 +    private fun int(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.int(value) }
@@ -858,11 +977,9 @@ index 0000000..c0db0e4
 +            }
 +            is Binary -> {
 +                when (expr.op) {
-+                    "=" -> { val ref = reference(expr.left, env); val value = eval(expr.right, env); ref.write(value); value }
-+                    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> {
-+                        val ref = reference(expr.left, env)
-+                        val value = binary(expr.op.dropLast(1), ref.read(), eval(expr.right, env))
-+                        ref.write(value); value
++                    "=" -> assign(expr.left, env, read = false) { eval(expr.right, env) }
++                    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> assign(expr.left, env, read = true) {
++                        binary(expr.op.dropLast(1), it, eval(expr.right, env))
 +                    }
 +                    "&&" -> eval(expr.left, env).let { if (truth(it)) eval(expr.right, env) else it }
 +                    "||" -> eval(expr.left, env).let { if (truth(it)) it else eval(expr.right, env) }
@@ -879,28 +996,41 @@ index 0000000..c0db0e4
 +                    self = eval(expr.fn.target, env)
 +                    val key = eval(expr.fn.key, env)
 +                    if (!expr.construct && key == "call" && (self is JsFunction || self is Native)) {
-+                        val args = if (expr.args.isEmpty()) emptyList() else expr.args.map { eval(it, env) }
-+                        return invoke(self, args.getOrElse(0) { Undefined }, args.drop(1))
++                        if (expr.args.isEmpty()) return invoke(self, Undefined, emptyList())
++                        val receiver = eval(expr.args[0], env)
++                        return invoke(self, receiver, arguments(expr.args, env, 1))
 +                    }
 +                    val method = property(self, key)
 +                    if (method === Undefined && key is String && (self is String || self is JsArray || self is Native) && identifierProperty(key) && key !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '$key'")
 +                    method
 +                } else eval(expr.fn, env)
-+                val args = if (expr.args.isEmpty()) emptyList() else expr.args.map { eval(it, env) }
++                val args = arguments(expr.args, env)
 +                if (expr.construct) {
 +                    if (fn !is Native) unsupported("Only built-in transform constructors are supported")
 +                    invoke(fn, Undefined, args, construct = true)
 +                } else invoke(fn, self, args)
 +            }
 +            is Update -> {
-+                val ref = reference(expr.target, env)
-+                val old = number(ref.read()); val value = old + if (expr.op == "++") 1 else -1
-+                ref.write(value); if (expr.prefix) value else old
++                var old = 0.0
++                val value = assign(expr.target, env, read = true) {
++                    old = number(it)
++                    old + if (expr.op == "++") 1 else -1
++                }
++                if (expr.prefix) value else old
 +            }
 +            is ArrayExpr -> array(expr.items.map { eval(it, env) })
 +            is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
 +            is FunctionExpr -> { allocate(1); JsFunction(expr, env) }
 +        } } finally { expressionDepth-- }
++    }
++    private fun arguments(args: List<Expr>, env: Env, start: Int = 0): List<Any?> = when (args.size - start) {
++        0 -> emptyList()
++        1 -> listOf(eval(args[start], env))
++        2 -> listOf(eval(args[start], env), eval(args[start + 1], env))
++        3 -> listOf(eval(args[start], env), eval(args[start + 1], env), eval(args[start + 2], env))
++        else -> ArrayList<Any?>(args.size - start).also { values ->
++            for (i in start until args.size) values.add(eval(args[i], env))
++        }
 +    }
 +    fun function(code: FunctionExpr): JsFunction = JsFunction(code, global)
 +    fun expression(expr: Expr, values: Map<String, Any?> = emptyMap()): Any? = eval(expr, Env(global).also { it.values.putAll(values) })
@@ -927,12 +1057,15 @@ index 0000000..c0db0e4
 +                }
 +                is JsFunction -> {
 +                    val env = functionEnv(fn, self, args, reuse)
++                    // Reserve eleven complex-expression levels for the XOR-key shape; otherwise retain depth checks.
++                    if (expressionDepth <= 245 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
 +                    val key = if (args.size >= 2 && args[0] is Double && args[1] is Double) DispatchKey(fn.code, args[0] as Double, args[1] as Double) else null
 +                    val body = if (key == null) fn.code.body else dispatch[key] ?: specializedBodies?.get(key) ?: if (specializedBodies != null && specializedBodies.size < 256) specialize(fn.code, key.first, key.second, this).also { specializedBodies[key] = it } else fn.code.body
 +                    when (val flow = exec(body, env)) {
-+                        is Returned -> flow.value
 +                        is Jump -> unsupported("Invalid or unsupported jump from transform function")
-+                        else -> Undefined
++                        null -> Undefined
++                        ReturnedNull -> null
++                        else -> flow
 +                    }
 +                }
 +                else -> throw JsThrown("Value is not callable")
@@ -940,20 +1073,20 @@ index 0000000..c0db0e4
 +        } finally { calls-- }
 +    }
 +    private fun copyTemplate(value: Any?): Any? = when (value) {
-+        is JsArray -> array(value.values.map(::copyTemplate))
-+        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValues { copyTemplate(it.value) }.toMutableMap()) }
++        is JsArray -> { allocate(value.values.size); JsArray(MutableList(value.values.size) { copyTemplate(value.values[it]) }) }
++        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValuesTo(mutableMapOf()) { copyTemplate(it.value) }) }
 +        is JsFunction -> { allocate(1); JsFunction(value.code, global) }
 +        else -> value
 +    }
-+    // Return and jump are ordinary interpreter control flow, not stack-trace-bearing exceptions.
++    // null means normal completion; returns carry their value (null encoded), jumps carry the AST node.
 +    fun exec(stmt: Stmt, env: Env): Any? {
 +        tick()
 +        when (stmt) {
-+            is Block -> for (child in stmt.statements) { val flow = exec(child, env); if (flow != null) return flow }
++            is Block -> for (i in stmt.statements.indices) { val flow = exec(stmt.statements[i], env); if (flow != null) return flow }
 +            is ExpressionStmt -> { eval(stmt.expr, env) }
-+            is Vars -> stmt.items.forEach { (name, expr) -> if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
++            is Vars -> for (i in stmt.items.indices) { val (name, expr) = stmt.items[i]; if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
 +            is IfStmt -> return if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) }
-+            is ReturnStmt -> return Returned(if (stmt.expr == null) Undefined else eval(stmt.expr, env))
++            is ReturnStmt -> return (if (stmt.expr == null) Undefined else eval(stmt.expr, env)) ?: ReturnedNull
 +            is ThrowStmt -> throw JsThrown(eval(stmt.expr, env))
 +            is Loop -> {
 +                stmt.init?.let { exec(it, env) }
@@ -991,32 +1124,40 @@ index 0000000..c0db0e4
 +                val value = eval(stmt.expr, env)
 +                var start = stmt.cases.indexOfFirst { it.first != null && equal(value, eval(it.first!!, env), true) }
 +                if (start < 0) start = stmt.cases.indexOfFirst { it.first == null }
-+                if (start >= 0) for (i in start until stmt.cases.size) for (child in stmt.cases[i].second) {
-+                    val flow = exec(child, env)
-+                    if (flow is Jump && !flow.isContinue && flow.label == null) return null
-+                    if (flow != null) return flow
++                if (start >= 0) for (i in start until stmt.cases.size) {
++                    val statements = stmt.cases[i].second
++                    for (j in statements.indices) {
++                        val flow = exec(statements[j], env)
++                        if (flow is Jump && !flow.isContinue && flow.label == null) return null
++                        if (flow != null) return flow
++                    }
 +                }
 +            }
 +            EmptyStmt -> Unit
 +        }
 +        return null
 +    }
-+    private fun reference(expr: Expr, env: Env): Reference = when (expr) {
++    // Keep the target and its old value stable across RHS mutations without allocating a reference.
++    private inline fun assign(expr: Expr, env: Env, read: Boolean, value: (Any?) -> Any?): Any? = when (expr) {
 +        is Id -> {
 +            if (expr.slot >= 0) {
 +                val slots = env.frame!!.slots
-+                Reference({ slots[expr.slot] }, { value -> slots[expr.slot] = value })
++                val result = value(if (read) slots[expr.slot] else Undefined)
++                slots[expr.slot] = result
++                result
 +            } else {
 +                val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
-+                Reference({ owner[expr.name] }, { value -> owner[expr.name] = value })
++                val result = value(if (read) owner[expr.name] else Undefined)
++                owner[expr.name] = result
++                result
 +            }
 +        }
 +        is Member -> {
 +            val obj = eval(expr.target, env); val key = eval(expr.key, env)
-+            Reference({ property(obj, key) }, { value ->
-+                val i = numericIndex(key)
-+                if (obj is JsArray && i != null) setIndex(obj, i, value) else set(obj, text(key), value)
-+            })
++            val result = value(if (read) property(obj, key) else Undefined)
++            val i = numericIndex(key)
++            if (obj is JsArray && i != null) setIndex(obj, i, result) else set(obj, text(key), result)
++            result
 +        }
 +        else -> unsupported("Invalid assignment target")
 +    }
@@ -1050,7 +1191,7 @@ index 0000000..c0db0e4
 +        obj.values[i] = value
 +    }
 +    private fun numericIndex(key: Any?): Int? = if (key is Double && key >= 0 && key < 65_536 && key == key.toInt().toDouble()) key.toInt() else null
-+    private fun property(obj: Any?, key: Any?): Any? {
++    internal fun property(obj: Any?, key: Any?): Any? {
 +        val i = numericIndex(key)
 +        if (i != null) when (obj) {
 +            is JsArray -> { tick(); val value = obj.values.getOrElse(i) { Undefined }; return if (value === Hole) Undefined else value }
@@ -1109,6 +1250,7 @@ index 0000000..c0db0e4
 +    )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
 +    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
 +    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
++    private val latin1Characters = Array(256) { it.toChar().toString() }
 +    private fun arrayMethod(name: String): Any? {
 +        return when (name) {
 +            "reverse" -> Native { r, self, _ -> val target = self as? JsArray ?: unsupported("Unsupported array method receiver"); r.tick(target.values.size); target.values.reverse(); target }
@@ -1127,18 +1269,35 @@ index 0000000..c0db0e4
 +                r.string(result.toString())
 +            }
 +            "push" -> Native { r, self, a -> val v = arrayValues(self); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); v.size.toDouble() }
-+            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(0, a); v.size.toDouble() }
++            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); v.size.toDouble() }
 +            "pop" -> Native { _, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
 +            "shift" -> Native { r, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else { r.tick(v.size); v.removeAt(0).let { if (it === Hole) Undefined else it } } }
-+            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); r.tick(end.coerceAtLeast(start) - start); r.array(v.subList(start, end.coerceAtLeast(start))) }
++            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); val count = (end - start).coerceAtLeast(0); r.tick(count); r.arrayRange(v, start, count) }
 +            "splice" -> Native { r, self, a ->
 +                val v = arrayValues(self)
 +                val start = r.relative(a.getOrElse(0) { 0.0 }, v.size)
 +                val count = if (a.isEmpty()) 0 else if (a.size < 2) v.size - start else r.integer(a[1]).coerceIn(0, v.size - start)
-+                val added = a.drop(2)
-+                if (v.size - count + added.size > 65_536) unsupported("Array size limit exceeded")
-+                val removed = r.array(v.subList(start, start + count)); r.allocate(added.size); r.tick(v.size)
-+                v.subList(start, start + count).clear(); v.addAll(start, added); removed
++                val added = (a.size - 2).coerceAtLeast(0)
++                if (v.size - count + added > 65_536) unsupported("Array size limit exceeded")
++                val removed = r.arrayRange(v, start, count); r.allocate(added); r.tick(v.size)
++                val change = added - count
++                when {
++                    count == v.size && added == 0 -> v.clear()
++                    count == 1 && added == 0 -> v.removeAt(start)
++                    count == 0 && added == 1 -> v.add(start, a[2])
++                    else -> {
++                        if (change < 0) {
++                            for (i in start + count until v.size) v[i + change] = v[i]
++                            repeat(-change) { v.removeAt(v.lastIndex) }
++                        } else if (change > 0) {
++                            val size = v.size
++                            repeat(change) { v.add(Hole) }
++                            for (i in size - 1 downTo start + count) v[i + change] = v[i]
++                        }
++                        for (i in 0 until added) v[start + i] = a[i + 2]
++                    }
++                }
++                removed
 +            }
 +            "forEach" -> Native { r, self, a ->
 +                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
@@ -1149,13 +1308,20 @@ index 0000000..c0db0e4
 +                val selfArg = a.getOrElse(1) { Undefined }
 +                // Without closures or arguments, a callback cannot retain its invocation frame.
 +                var frame: Env? = null
++                // Observable arguments are copied by functionEnv; nested traversals own their buffer.
++                var callbackArgs: MutableList<Any?>? = null
 +                for (i in 0 until length) {
 +                    r.tick()
 +                    if (i < v.size && v[i] !== Hole) {
 +                        if (frame == null && callback is JsFunction && !callback.code.hasClosures && !callback.code.usesArguments) {
-+                            frame = r.functionEnv(callback, selfArg, emptyList())
++                            // Keep the preparation budget, but let invoke initialize the bindings once.
++                            r.allocate(callback.code.slots.size)
++                            r.tick(callback.code.slots.size)
++                            frame = Env(callback.env, callback.code.slots)
 +                        }
-+                        r.invoke(callback, selfArg, listOf(v[i], i.toDouble(), target), reuse = frame)
++                        if (callbackArgs == null) callbackArgs = mutableListOf(v[i], i.toDouble(), target)
++                        else { callbackArgs[0] = v[i]; callbackArgs[1] = i.toDouble() }
++                        r.invoke(callback, selfArg, callbackArgs, reuse = frame)
 +                    }
 +                }
 +                Undefined
@@ -1183,6 +1349,21 @@ index 0000000..c0db0e4
 +            if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
 +            val limit = if (a.size < 2 || a[1] === Undefined) 4_294_967_295L else r.uint(a[1])
 +            val sep = a.firstOrNull()
++            val separator = if (limit > 0 && a.isNotEmpty() && sep !== Undefined) text(sep) else null
++            if (separator == "") {
++                val size = minOf(value.length.toLong(), limit).toInt()
++                if (size > 65_536) unsupported("Array size limit exceeded")
++                val parts = MutableList<Any?>(size) { i ->
++                    r.tick(2)
++                    if (value.length == 1) value else {
++                        r.allocate(1)
++                        val char = value[i]
++                        if (char.code < latin1Characters.size) latin1Characters[char.code] else char.toString()
++                    }
++                }
++                r.allocate(size)
++                return@Native JsArray(parts)
++            }
 +            val parts = mutableListOf<Any?>()
 +            fun addPart(start: Int, end: Int) {
 +                r.tick(end - start + 1)
@@ -1191,13 +1372,10 @@ index 0000000..c0db0e4
 +                else { r.allocate(end - start); parts.add(value.substring(start, end)) }
 +            }
 +            if (limit > 0) {
-+                if (a.isEmpty() || sep === Undefined) addPart(0, value.length)
++                if (separator == null) addPart(0, value.length)
 +                else {
-+                    val separator = text(sep)
 +                    var start = 0
-+                    if (separator.isEmpty()) {
-+                        while (start < value.length && parts.size.toLong() < limit) { addPart(start, start + 1); start++ }
-+                    } else while (parts.size.toLong() < limit) {
++                    while (parts.size.toLong() < limit) {
 +                        val end = r.find(value, separator, start)
 +                        if (end < 0) { addPart(start, value.length); break }
 +                        addPart(start, end)
@@ -1205,7 +1383,8 @@ index 0000000..c0db0e4
 +                    }
 +                }
 +            }
-+            r.array(parts)
++            r.allocate(parts.size)
++            JsArray(parts)
 +        }
 +        "slice", "substring", "substr" -> Native { r, self, a ->
 +            val value = stringReceiver(self)
@@ -1349,10 +1528,10 @@ index 0000000..c0db0e4
 +}
 diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt
 new file mode 100644
-index 0000000..a76c7b8
+index 0000000..e15cf78
 --- /dev/null
 +++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt
-@@ -0,0 +1,463 @@
+@@ -0,0 +1,478 @@
 +package meow.nyx.quackjs
 +
 +/** Lex once to index the player scope; parse and execute only selected dependencies. */
@@ -1400,6 +1579,7 @@ index 0000000..a76c7b8
 +        var braces = 0
 +        var parens = 0
 +        var count = 0
++        var callCount = 0
 +        var previous: String? = null
 +        var prefixUpdate = false
 +        val headers = mutableMapOf<Int, Pair<Int, String?>>()
@@ -1434,17 +1614,20 @@ index 0000000..a76c7b8
 +            }
 +            if (token.kind == 0 && token.text == "delete") prefixUpdate = true
 +            if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
-+                val lhs = assignmentTarget(recent, call = true, grouped = true)
-+                if (lhs != null) recordUpdate(lhs.first().text)
++                val start = assignmentTargetStart(recent, targetEnd(recent), call = true)
++                if (start >= 0) recordUpdate(recent[start].text)
 +                prefixUpdate = token.text == "++" || token.text == "--"
 +            }
 +            if (token.kind == 0 && token.text == "=") {
-+                val lhs = assignmentTarget(recent, grouped = true)
-+                if (lhs != null) {
++                val end = targetEnd(recent)
++                val start = assignmentTargetStart(recent, end)
++                if (start >= 0) {
 +                    if (found.size >= 100_000) unsupported("Source definition limit exceeded")
++                    val lhs = recent.subList(start, end + 1).toList()
 +                    found.add(Assignment(lhs, token.offset + 1, braces, parens))
-+                    if (lhs.size == 3 && lhs[0].text == "g" && lhs[1].text == "." && lhs[2].text == className && braces < classDepth) {
++                    if (classTarget(lhs, className) && braces < classDepth) {
 +                        classDepth = braces
++                        calls.removeAll { it.braces > classDepth }
 +                        classParameters = activeScopes.map { it.parameters }
 +                        classBindings = activeScopes.mapNotNull { it.name }
 +                        classFunctionScope = activeScopes.lastOrNull()?.depth == braces
@@ -1452,15 +1635,19 @@ index 0000000..a76c7b8
 +                }
 +            }
 +            if (token.kind == 0 && token.text == "(") {
-+                val target = assignmentTarget(recent, call = true)
++                val start = assignmentTargetStart(recent, call = true)
 +                val namedFunction = recent.getOrNull(recent.lastIndex - 1)
-+                if (target?.singleOrNull()?.text == "function") headers[parens] = token.offset + 1 to null
++                if (start >= 0 && start == recent.lastIndex && recent[start].text == "function") headers[parens] = token.offset + 1 to null
 +                else if (namedFunction?.kind == 0 && namedFunction.text == "function") headers[parens] = token.offset + 1 to recent.last().text
-+                if (target != null && target.first().text !in nonCalls || target == null && recent.lastOrNull()?.text in listOf(")", "?.")) {
-+                    if (calls.size >= 100_000) unsupported("Source call limit exceeded")
-+                    val before = target?.let { recent.getOrNull(recent.size - it.size - 1) }
-+                    val statement = target != null && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
-+                    calls.add(CallSite(target, token.offset + 1, braces, statement))
++                if (start >= 0 && recent[start].text !in nonCalls || start < 0 && recent.lastOrNull()?.text in listOf(")", "?.")) {
++                    if (callCount++ >= 100_000) unsupported("Source call limit exceeded")
++                    // Only call effects at the shallowest class depth can be consumed below.
++                    if (braces <= classDepth) {
++                        val before = recent.getOrNull(start - 1)
++                        val statement = start >= 0 && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
++                        val target = if (start < 0) null else recent.subList(start, recent.size).toList()
++                        calls.add(CallSite(target, token.offset + 1, braces, statement))
++                    }
 +                }
 +            }
 +            if (token.kind == 0) when (token.text) {
@@ -1478,7 +1665,7 @@ index 0000000..a76c7b8
 +            previous = token.context
 +        }
 +        if (braces != 0 || parens != 0) unsupported("Unbalanced player source")
-+        val classes = found.filter { it.lhs.map(Token::text) == listOf("g", ".", className) }
++        val classes = found.filter { classTarget(it.lhs, className) }
 +        val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$className'")
 +        val classAssignments = classes.filter { it.braces == depth }
 +        if (classAssignments.size != 1) unsupported("Ambiguous n class '$className'")
@@ -1765,7 +1952,7 @@ index 0000000..a76c7b8
 +    }
 +
 +    fun classFunction(name: String): FunctionExpr {
-+        val entry = assignments.singleOrNull { it.lhs.map(Token::text) == listOf("g", ".", name) }
++        val entry = assignments.singleOrNull { classTarget(it.lhs, name) }
 +            ?: unsupported("Missing or ambiguous n class '$name'")
 +        return parseAt(entry.offset) as? FunctionExpr ?: unsupported("Unsupported n class")
 +    }
@@ -1792,27 +1979,34 @@ index 0000000..a76c7b8
 +        fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }
 +        private val nonCalls = setOf("function", "if", "while", "for", "switch", "catch", "with", "typeof", "void", "delete", "return", "throw", "new")
 +        private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
-+        private fun assignmentTarget(tokens: List<Token>, call: Boolean = false, grouped: Boolean = false): List<Token>? {
++        private val targetPrefixes = setOf("var", "let", "const", ";", ",", "{", "}", "(", ")")
++        private val callPrefixes = setOf("=", "return", "new", "(", "?", ":")
++        private fun classTarget(tokens: List<Token>, name: String): Boolean =
++            tokens.size == 3 && tokens[0].text == "g" && tokens[1].text == "." && tokens[2].text == name
++        private fun targetEnd(tokens: List<Token>): Int {
 +            var end = tokens.lastIndex
-+            if (grouped) while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
++            while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
++            return end
++        }
++        private fun assignmentTargetStart(tokens: List<Token>, end: Int = tokens.lastIndex, call: Boolean = false): Int {
 +            var start = end
-+            if (start < 0) return null
++            if (start < 0) return -1
 +            var brackets = 0
 +            while (start >= 0) {
 +                val token = tokens[start]
-+                if (token.kind != 0) { if (brackets == 0) return null; start--; continue }
++                if (token.kind != 0) { if (brackets == 0) return -1; start--; continue }
 +                if (token.text == "]") brackets++
 +                if (token.text == "[") brackets--
-+                if (brackets == 0 && token.text !in listOf(".", "[", "]")) {
-+                    if (!identifier(token.text)) return null
++                if (brackets == 0 && token.text != "." && token.text != "[" && token.text != "]") {
++                    if (!identifier(token.text)) return -1
 +                    if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
 +                    val before = tokens.getOrNull(start - 1)?.text
-+                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(", ")") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
-+                    return tokens.subList(start, end + 1).toList()
++                    if (before != null && before !in targetPrefixes && !(call && before in callPrefixes)) return -1
++                    return start
 +                }
 +                start--
 +            }
-+            return null
++            return -1
 +        }
 +    }
 +}
@@ -1940,10 +2134,10 @@ index 0000000..da9a829
 +}
 diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt
 new file mode 100644
-index 0000000..cb0032d
+index 0000000..faf06c3
 --- /dev/null
 +++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,390 @@
 +package meow.nyx.quackjs
 +
 +internal fun unsupported(message: String): Nothing = throw UnsupportedPlayerException(message)
@@ -2099,6 +2293,7 @@ index 0000000..cb0032d
 +    val nameSlot: Int
 +    val usesArguments: Boolean
 +    val hasClosures: Boolean
++    val hotCharacterPlan: HotCharacterPlan?
 +    init {
 +        val names = mutableSetOf<String>()
 +        val ids = mutableListOf<Id>()
@@ -2129,6 +2324,7 @@ index 0000000..cb0032d
 +        }
 +        usesArguments = arguments
 +        hasClosures = closures
++        hotCharacterPlan = HotCharacterPlan.compile(this)
 +    }
 +}
 +internal data class RegexValue(val source: String)
