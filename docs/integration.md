@@ -17,16 +17,15 @@ repositories {
 }
 kotlin {
     sourceSets.commonMain.dependencies {
-        implementation("com.github.MetrolistGroup:quackjs:0.1.0")
+        implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.0")
     }
 }
 ```
 
-**0.1.0 is the target release; hosted artifacts and this tentative coordinate are
-not yet verified.** Check JitPack's actual KMP root/module coordinate and platform
-metadata before updating a consumer pin. Android requires min SDK 23; Android/JVM
-artifacts target Java 17. Do not rely on Maven Local, `includeBuild`, dependency
-substitution or a copied `:quackjs` module for the hosted migration.
+Use this KMP module coordinate, not JitPack's `com.github.MetrolistGroup:quackjs`
+aggregate POM, which pulls every platform at once. Android requires min SDK 23;
+Android/JVM artifacts target Java 17. Do not rely on Maven Local, `includeBuild`,
+dependency substitution or a copied `:quackjs` module for the hosted migration.
 
 ## Backend changes
 

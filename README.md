@@ -6,16 +6,13 @@ Source: [MetrolistGroup/quackjs](https://github.com/MetrolistGroup/quackjs).
 
 ## Install with JitPack
 
-Target release: **0.1.0**. Hosted artifacts and the coordinate below are not yet
-verified; confirm the release's JitPack metadata before adopting it.
-
 ```kotlin
 repositories {
     mavenCentral()
     maven("https://jitpack.io")
 }
 // KMP commonMain dependencies:
-implementation("com.github.MetrolistGroup:quackjs:0.1.0")
+implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.0")
 ```
 
 Targets: Android (min SDK 23), JVM (Java 17), Linux x64, iOS arm64 and iOS simulator

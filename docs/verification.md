@@ -115,20 +115,20 @@ when intentionally rotating the corpus.
 
 ## Publication checks
 
-The checker currently included in this checkout validates only the local
-`meow.nyx:quackjs:0.1.0-SNAPSHOT` build. From the repository root:
+Build with JDK 21 and Android SDK 37. The checker validates all six KMP
+publications, target links, artifact hashes, stdlib-only dependencies and Java 17
+bytecode without JS/JNI payloads:
 
 ```sh
 ./gradlew publishToMavenLocal
-python3 integrations/verify-quackjs-publication.py "$HOME/.m2/repository/meow/nyx"
+python3 scripts/verify-publication.py \
+  "$HOME/.m2/repository/com/github/MetrolistGroup/quackjs" 0.1.0
 ```
 
-Its version is hardcoded to `0.1.0-SNAPSHOT`; it cannot verify the target release.
-The planned replacement command,
-`python3 scripts/verify-publication.py <Maven-group-directory> <version>`, is
-**not available in this checkout**. Release setup must provide that parameterized
-verifier before checking `com.github.MetrolistGroup` artifacts at version `0.1.0`.
-Do not pass release artifacts to the snapshot checker.
+JitPack runs the checked-in `jitpack.yml` and uses its tag/commit as
+`-PVERSION_NAME`. Use `com.github.MetrolistGroup.quackjs:quackjs:<version>` for the
+KMP root, not the repository's aggregate POM. To verify downloaded artifacts,
+pass their Maven group directory and version to the same checker.
 
 Local publication checks do not prove hosted availability. Before adoption, check
 JitPack metadata and resolve each required platform variant in a fresh external

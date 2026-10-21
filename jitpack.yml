@@ -1,0 +1,6 @@
+jdk:
+  - openjdk21
+
+# JitPack's SDKMAN JDK 21 fails to open JARs on some workers; use Temurin instead.
+install:
+  - 'curl -fSL --retry 5 --retry-delay 5 -o /tmp/temurin.tgz https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse && mkdir -p /tmp/temurin && tar -xzf /tmp/temurin.tgz -C /tmp/temurin --strip-components=1 && export JAVA_HOME=/tmp/temurin PATH=/tmp/temurin/bin:$PATH && ./gradlew jvmTest testAndroidHostTest publishToMavenLocal -PVERSION_NAME="$VERSION" --no-daemon --max-workers=2'

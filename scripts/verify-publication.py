@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check the locally published runtime variants, bytecode and absence of JS/native payloads."""
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -7,13 +8,34 @@ import struct
 import sys
 import zipfile
 
-root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / ".m2/repository/meow/nyx"
-version = "0.1.0-SNAPSHOT"
+if len(sys.argv) != 3:
+    raise SystemExit("Usage: verify-publication.py <Maven-group-directory> <version>")
+root = Path(sys.argv[1])
+version = sys.argv[2]
+group = "com.github.MetrolistGroup.quackjs"
 modules = ["quackjs", "quackjs-jvm", "quackjs-android", "quackjs-iosarm64", "quackjs-iossimulatorarm64", "quackjs-linuxx64"]
 for module in modules:
     metadata = root / module / version / f"{module}-{version}.module"
     data = json.loads(metadata.read_text())
+    assert data["component"]["group"] == group, data["component"]
+    assert data["component"]["module"] == "quackjs", data["component"]
+    if module != "quackjs":
+        owner = metadata.parent / data["component"]["url"]
+        assert owner.resolve() == (root / "quackjs" / version / f"quackjs-{version}.module").resolve(), owner
+    assert data["component"]["version"] == version, data["component"]
     for variant in data["variants"]:
+        if "available-at" in variant:
+            target = variant["available-at"]
+            assert target["group"] == group and target["version"] == version, target
+            assert target["module"] in modules, target
+            expected = root / target["module"] / version / f"{target['module']}-{version}.module"
+            assert (metadata.parent / target["url"]).resolve() == expected.resolve(), target
+            assert expected.is_file(), expected
+        for artifact in variant.get("files", []):
+            payload = metadata.parent / artifact["url"]
+            assert payload.is_file(), payload
+            if "sha256" in artifact:
+                assert hashlib.sha256(payload.read_bytes()).hexdigest() == artifact["sha256"], payload
         for dependency in variant.get("dependencies", []):
             assert (dependency["group"], dependency["module"]) == ("org.jetbrains.kotlin", "kotlin-stdlib"), dependency
     print(f"VERIFIED stdlib-only metadata: {module}")

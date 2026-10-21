@@ -5,8 +5,8 @@ plugins {
     id("com.android.kotlin.multiplatform.library") version "9.4.1"
     `maven-publish`
 }
-group = "meow.nyx"
-version = "0.1.0-SNAPSHOT"
+group = "com.github.MetrolistGroup.quackjs"
+version = providers.gradleProperty("VERSION_NAME").orElse("0.1.0").get()
 kotlin {
     android {
         namespace = "meow.nyx.quackjs"
@@ -31,6 +31,25 @@ kotlin {
             if (providers.gradleProperty("oracleOnly").isPresent) {
                 kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt", "**/Lane32Acceptance*.kt")
             }
+        }
+    }
+}
+
+publishing.publications.withType<MavenPublication>().configureEach {
+    pom {
+        name.set("QuackJS")
+        description.set("Kotlin-only YouTube player signature deciphering and n transforms")
+        url.set("https://github.com/MetrolistGroup/quackjs")
+        licenses {
+            license {
+                name.set("GNU General Public License, version 3 only")
+                url.set("https://www.gnu.org/licenses/gpl-3.0.html")
+                distribution.set("repo")
+            }
+        }
+        scm {
+            url.set("https://github.com/MetrolistGroup/quackjs")
+            connection.set("scm:git:https://github.com/MetrolistGroup/quackjs.git")
         }
     }
 }
