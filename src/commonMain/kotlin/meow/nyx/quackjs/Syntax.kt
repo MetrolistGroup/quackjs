@@ -1,6 +1,7 @@
 package meow.nyx.quackjs
 
 internal fun unsupported(message: String): Nothing = throw UnsupportedPlayerException(message)
+internal fun jsWhitespace(c: Char): Boolean = if (c <= '\u007f') c == ' ' || c in '\u0009'..'\u000d' else c in '\u2000'..'\u200a' || c in "\u00a0\u1680\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 internal data class Token(val text: String, val kind: Int = 0, val offset: Int = 0)
 internal val Token.context: String get() = if (kind == 0) text else "<value>"
@@ -20,7 +21,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
 
     fun next(previous: String? = null): Token {
         while (p < source.length) {
-            if (source[p].isWhitespace()) { p++; continue }
+            if (jsWhitespace(source[p])) { p++; continue }
             if (source.startsWith("//", p)) {
                 while (p < source.length && source[p] != '\n') p++
                 continue
@@ -111,7 +112,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
             }
             unsupported("Unclosed regex")
         }
-        for (op in operators) if (source.startsWith(op, start)) {
+        for (op in operators[c].orEmpty()) if (source.startsWith(op, start)) {
             p = start + op.length; return Token(op, 0, start)
         }
         return Token(c.toString(), 0, start)
@@ -119,22 +120,70 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
 
     companion object {
         private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
-        private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...")
+        private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...").groupBy { it[0] }
     }
 }
 
 internal sealed interface Expr
 internal data class Lit(val value: Any?) : Expr
-internal data class Id(val name: String) : Expr
+internal data class Id(val name: String) : Expr {
+    // Bound once by the enclosing function; captured and catch-shadowed names use lexical lookup.
+    var slot: Int = -1
+        internal set
+    var free: Boolean = false
+        internal set
+    var globalSlot: Int = -1
+        internal set
+}
 internal data class Unary(val op: String, val expr: Expr) : Expr
 internal data class Binary(val op: String, val left: Expr, val right: Expr) : Expr
+internal val assignmentOperators = setOf("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=")
 internal data class Conditional(val test: Expr, val yes: Expr, val no: Expr) : Expr
 internal data class Member(val target: Expr, val key: Expr) : Expr
 internal data class Call(val fn: Expr, val args: List<Expr>, val construct: Boolean = false) : Expr
 internal data class Update(val op: String, val target: Expr, val prefix: Boolean) : Expr
 internal data class ArrayExpr(val items: List<Expr>) : Expr
 internal data class ObjectExpr(val items: List<Pair<String, Expr>>) : Expr
-internal data class FunctionExpr(val params: List<String>, val body: Block, val name: String? = null) : Expr
+internal class FunctionExpr(val params: List<String>, val body: Block, val name: String? = null) : Expr {
+    val slots: Map<String, Int>
+    val parameterSlots: IntArray
+    val thisSlot: Int
+    val argumentsSlot: Int
+    val nameSlot: Int
+    val usesArguments: Boolean
+    val hasClosures: Boolean
+    init {
+        val names = mutableSetOf<String>()
+        val ids = mutableListOf<Id>()
+        val catches = mutableSetOf<String>()
+        var arguments = false
+        var closures = false
+        val pending = ArrayDeque<Any>()
+        pending.add(body)
+        while (pending.isNotEmpty()) {
+            val node = pending.removeLast()
+            when (node) {
+                is Id -> { ids.add(node); if (node.name == "arguments") arguments = true }
+                is Vars -> node.items.forEach { names.add(it.first) }
+                is TryStmt -> node.catchName?.let { catches.add(it) }
+                is FunctionExpr -> closures = true
+            }
+            if (node !is FunctionExpr) syntaxChildren(node) { pending.add(it) }
+        }
+        val all = (params + listOf("this", "arguments") + listOfNotNull(name) + names).distinct()
+        slots = all.withIndex().associate { it.value to it.index }
+        parameterSlots = IntArray(params.size) { slots.getValue(params[it]) }
+        thisSlot = slots.getValue("this")
+        argumentsSlot = slots.getValue("arguments")
+        nameSlot = name?.let { slots.getValue(it) } ?: -1
+        for (id in ids) if (id.name !in catches) {
+            id.slot = slots[id.name] ?: -1
+            id.free = id.slot < 0
+        }
+        usesArguments = arguments
+        hasClosures = closures
+    }
+}
 internal data class RegexValue(val source: String)
 internal sealed interface Stmt
 internal data class Block(val statements: List<Stmt>) : Stmt

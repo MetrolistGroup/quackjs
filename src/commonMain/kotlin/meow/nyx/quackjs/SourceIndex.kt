@@ -14,11 +14,12 @@ internal class SourceIndex(val source: String, className: String) {
 
     init {
         if (source.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
-        if (className.length > 128 || !identifier.matches(className)) unsupported("Invalid n class hint")
+        if (className.length > 128 || !identifier(className)) unsupported("Invalid n class hint")
         val lexer = Lexer(source)
         val recent = ArrayDeque<Token>()
         val found = mutableListOf<Assignment>()
         val methodCalls = mutableListOf<Triple<String, Int, Int>>()
+        val callArguments = mutableListOf<Pair<Int, Int>>()
         val updates = mutableListOf<Triple<String, Int, Boolean>>()
         val stamps = mutableSetOf<Int>()
         var pendingStamp: Int? = null
@@ -38,30 +39,32 @@ internal class SourceIndex(val source: String, className: String) {
             if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
             pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
             if (prefixUpdate) {
-                if (token.kind == 0 && identifier.matches(token.text)) {
+                if (token.kind == 0 && identifier(token.text)) {
                     val next = Lexer(source, token.offset + token.text.length).next(token.context)
                     recordUpdate(token.text, next.kind == 0 && next.text in listOf(".", "["))
                     prefixUpdate = false
                 }
                 else if (token.kind != 0 || token.text != "(") prefixUpdate = false
             }
+            if (token.kind == 0 && token.text == "delete") prefixUpdate = true
             if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
-                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" }, call = true)
+                val lhs = assignmentTarget(recent, call = true, grouped = true)
                 if (lhs != null) recordUpdate(lhs.first().text, lhs.size > 1)
                 prefixUpdate = token.text == "++" || token.text == "--"
             }
             if (token.kind == 0 && token.text == "=") {
-                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" })
+                val lhs = assignmentTarget(recent, grouped = true)
                 if (lhs != null) {
                     if (found.size >= 100_000) unsupported("Source definition limit exceeded")
                     found.add(Assignment(lhs, token.offset + 1, braces, parens))
                 }
             }
             if (token.kind == 0 && token.text == "(") {
-                val target = assignmentTarget(recent.toList(), call = true)
-                if (target != null && target.size > 1) {
-                    if (methodCalls.size >= 100_000) unsupported("Source call limit exceeded")
-                    methodCalls.add(Triple(target.first().text, braces, parens))
+                val target = assignmentTarget(recent, call = true)
+                if (target != null && target.first().text !in nonCalls || target == null && recent.lastOrNull()?.text in listOf(")", "?.")) {
+                    if (callArguments.size >= 100_000) unsupported("Source call limit exceeded")
+                    callArguments.add(token.offset + 1 to braces)
+                    if (target != null && target.size > 1) methodCalls.add(Triple(target.first().text, braces, parens))
                 }
             }
             if (token.kind == 0) when (token.text) {
@@ -87,13 +90,19 @@ internal class SourceIndex(val source: String, className: String) {
         val writes = found.filter { it.braces == rootBraces }
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
         val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).toMutableSet()
+        // An object passed to initialization code can be mutated even when the callee is Object.assign.
+        for ((offset, depth) in callArguments) if (depth == rootBraces) sharedMutations.addAll(argumentReferences(offset))
         val aliases = mutableMapOf<String, MutableSet<String>>()
         for (write in writes) {
             if (write.lhs.size != 1) continue
-            val target = referenceBase(write.offset) ?: continue
+            val direct = referenceBase(write.offset)
+            val first = if (direct == null) Lexer(source, write.offset).next() else null
+            val targets = if (direct != null) setOf(direct) else if (first?.kind == 0 && first.text in listOf("[", "{")) argumentReferences(first.offset + 1, if (first.text == "[") "]" else "}", first.text) else emptySet()
             val alias = write.lhs.single().text
-            aliases.getOrPut(alias) { mutableSetOf() }.add(target)
-            aliases.getOrPut(target) { mutableSetOf() }.add(alias)
+            for (target in targets) {
+                aliases.getOrPut(alias) { mutableSetOf() }.add(target)
+                aliases.getOrPut(target) { mutableSetOf() }.add(alias)
+            }
         }
         val queue = ArrayDeque(sharedMutations)
         while (queue.isNotEmpty()) {
@@ -101,6 +110,42 @@ internal class SourceIndex(val source: String, className: String) {
         }
         mutatedObjects = sharedMutations + updates.filter { it.second == rootBraces }.map { it.first }
         timestamps = stamps
+    }
+
+    private fun argumentReferences(offset: Int, closing: String = ")", opening: String = "("): Set<String> {
+        val lexer = Lexer(source, offset)
+        val references = mutableSetOf<String>()
+        var previous: String? = opening
+        var depth = 0
+        var count = 0
+        var functionDepth: Int? = null
+        var functionBody = false
+        var parametersClosed = false
+        var reference: Token? = null
+        var beforeReference: String? = null
+        while (true) {
+            val token = lexer.next(previous)
+            if (++count > 150_000) unsupported("Initialization call limit exceeded")
+            if (token.kind == -1) unsupported("Unclosed initialization call")
+            reference?.let { if (!(token.kind == 0 && token.text == ":" && beforeReference in listOf("{", ","))) references.add(it.text) }
+            reference = null
+            // Do not confuse property names or a callback's locals with escaped player globals.
+            if (token.kind == 0 && token.text == "function" && functionDepth == null) functionDepth = depth
+            if (token.kind == 0 && functionDepth == null && previous != "." && identifier(token.text)) { reference = token; beforeReference = previous }
+            if (token.kind == 0) {
+                if (functionDepth != null) {
+                    if (!functionBody && token.text == ")" && depth == functionDepth + 1) parametersClosed = true
+                    if (!functionBody && parametersClosed && token.text == "{" && depth == functionDepth) functionBody = true
+                    else if (functionBody && token.text == "}" && depth == functionDepth + 1) { functionDepth = null; functionBody = false; parametersClosed = false }
+                }
+                if (depth == 0 && token.text == closing) return references
+                when (token.text) {
+                    "(", "[", "{" -> depth++
+                    ")", "]", "}" -> depth--
+                }
+            }
+            previous = token.context
+        }
     }
 
     /** Link direct reference paths without evaluating unrelated initializers. */
@@ -115,13 +160,13 @@ internal class SourceIndex(val source: String, className: String) {
         var token = next() ?: return null
         var groups = 0
         while (token.kind == 0 && token.text == "(") { groups++; token = next() ?: return null }
-        if (token.kind != 0 || !identifier.matches(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
+        if (token.kind != 0 || !identifier(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
         val base = token.text
         token = next() ?: return base
         while (token.kind == 0 && token.text in listOf(".", "[")) {
             if (token.text == ".") {
                 token = next() ?: return base
-                if (token.kind != 0 || !identifier.matches(token.text)) return null
+                if (token.kind != 0 || !identifier(token.text)) return null
             } else {
                 var depth = 1
                 while (depth > 0) {
@@ -193,10 +238,13 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     companion object {
-        val identifier = Regex("[A-Za-z_$][A-Za-z0-9_$]*")
+        fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }
+        private val nonCalls = setOf("function", "if", "while", "for", "switch", "catch", "with", "typeof", "void", "delete", "return", "throw", "new")
         private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
-        private fun assignmentTarget(tokens: List<Token>, call: Boolean = false): List<Token>? {
-            var start = tokens.lastIndex
+        private fun assignmentTarget(tokens: List<Token>, call: Boolean = false, grouped: Boolean = false): List<Token>? {
+            var end = tokens.lastIndex
+            if (grouped) while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
+            var start = end
             if (start < 0) return null
             var brackets = 0
             while (start >= 0) {
@@ -205,11 +253,11 @@ internal class SourceIndex(val source: String, className: String) {
                 if (token.text == "]") brackets++
                 if (token.text == "[") brackets--
                 if (brackets == 0 && token.text !in listOf(".", "[", "]")) {
-                    if (!identifier.matches(token.text)) return null
+                    if (!identifier(token.text)) return null
                     if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
                     val before = tokens.getOrNull(start - 1)?.text
-                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
-                    return tokens.subList(start, tokens.size).toList()
+                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(", ")") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
+                    return tokens.subList(start, end + 1).toList()
                 }
                 start--
             }

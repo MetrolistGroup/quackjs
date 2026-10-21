@@ -32,6 +32,25 @@ class PlayerProgramTest {
         assertEquals("\ude00\ud83d\u2603", p.transformN("\u2603\ud83d\ude00"))
     }
 
+    @Test fun cachedInitializersKeepLiveAliasesClosuresAndNestedStateIndependent() {
+        val p = compile("state.nested.a.push(x);return alias.nested.a.length+':'+reader();", extra = """
+            var state={nested:{a:[]}};
+            var alias=state;
+            var reader=function(){return state.nested.a[0]};
+        """)
+        for (input in listOf("first", "second", "third")) assertEquals("1:$input", p.decipherSignature(input))
+        val table = compile("letters.reverse();return letters.join('')+x;", extra = "var letters='a;b;c'.split(';');")
+        repeat(3) { assertEquals("cba!", table.decipherSignature("!")) }
+        assertEquals("2:true", compile("var f=function(){if(false)var unused;return arguments.length+':'+(unused===undefined)};return f(x,1);").decipherSignature("x"))
+    }
+
+    @Test fun globalSlotCacheObservesRebindingAndLiveObjectMutations() {
+        val p = compile("var first=read();state=x;var second=read();items[0]=x;return first+':'+second+':'+readTable();", extra = "var state='initial';var items=['old'];var read=function(){return state};var readTable=function(){return items[0]};")
+        for (input in listOf("one", "two", "three")) assertEquals("initial:$input:$input", p.decipherSignature(input))
+        val fn = compile("var first=helper(x);helper=other;return first+':'+helper(x);", extra = "var helper=function(x){return 'a'+x};var other=function(x){return 'b'+x};")
+        repeat(3) { assertEquals("az:bz", fn.decipherSignature("z")) }
+    }
+
     @Test fun derivesLandmarksAndOptionalTimestamp() {
         val js = source() + """
             var decode=function(a,b,x){return x;};
@@ -97,6 +116,45 @@ class PlayerProgramTest {
         val expanding = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v0=this.V.n.length;$doubled rootN(this,this.V.n,v30);this.raw.replace('x','y');return this.V[k];")
         val error = assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(expanding, PlayerHints("sig(INPUT)", "C", 12345)) }
         assertTrue(error.message!!.contains("Syntax tree node limit"))
+    }
+
+    @Test fun nIsolationRejectsStaleSubstitutedLocalsAndRootWrites() {
+        val extra = "var rootN=function(o,v){o.set('n',v.split('').reverse().join(''));};"
+        for (body in listOf(
+            "var v=this.V.n;v=v.slice(1);rootN(this,v);",
+            "var v=this.V.n;v+='!';rootN(this,v);",
+            "var v=this.V.n;if(v.length<4)v='changed';rootN(this,v);",
+            "var v=this.V.n;v++;rootN(this,v);",
+            "var v=this.V.n;this.raw;var v='changed';rootN(this,v);",
+            "var v=this.V.n;var mutate=function(){v=v.slice(1)};mutate();rootN(this,v);",
+            "var v=this.V.n;var mutate=function(){v+='!'};mutate();rootN(this,v);",
+            "var o=this;var mutate=function(){o.V.n=o.V.n.slice(1)};mutate();rootN(this,this.V.n);",
+            "this.V.n=this.V.n.slice(1);rootN(this,this.V.n);",
+        )) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
+            assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+        }
+        val supported = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v=this.V.n;v=v.slice(1);rootN(this,v);return this.V[k];")
+        assertEquals("cb", PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
+    }
+
+    @Test fun externalCallsCannotSilentlyMutateDependencies() {
+        val signature = "return helper.f(x);"
+        val helper = "var helper={f:function(x){return x;}};"
+        for (mutation in listOf(
+            "Object.assign(helper,{f:function(x){return 'changed'}});",
+            "Object['assign']((helper),{f:function(x){return 'changed'}});",
+            "var alias=helper;Object.assign(alias,{f:function(x){return 'changed'}});",
+            "Object.assign.apply(null,[helper,{f:function(x){return 'changed'}}]);",
+            "(Object.assign)(helper,{f:function(x){return 'changed'}});",
+            "(0,Object.assign)(helper,{f:function(x){return 'changed'}});",
+            "mutate({target:helper});var mutate=function(o){o.target.f=function(x){return 'changed'}};",
+            "var args=[helper,{f:function(x){return 'changed'}}];Object.assign.apply(null,args);",
+            "var box={target:helper};mutate(box);var mutate=function(o){o.target.f=function(x){return 'changed'}};",
+            "delete helper.f;",
+            "mutate(helper);var mutate=function(o){o.f=function(x){return 'changed'}};",
+        )) assertFailsWith<UnsupportedPlayerException>(mutation) { compile(signature, extra = helper + mutation) }
+        assertEquals("cba", compile("var o={};Object.assign(o,{v:x});return o.v.split('').reverse().join('');").decipherSignature("abc"))
     }
 
     @Test fun nIsolationDoesNotDropInputDependentGuards() {
@@ -169,6 +227,13 @@ class PlayerProgramTest {
         assertFailsWith<UnsupportedPlayerException> { compile("return recur(x);", extra = "var recur=function(x){return recur(x)};") }
     }
 
+    @Test fun functionFramesConsumeTheAllocationBudget() {
+        val locals = (0 until 10_000).joinToString(",") { "v$it" }
+        val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){var $locals;};")
+        val error = assertFailsWith<UnsupportedPlayerException> { p.decipherSignature("evil") }
+        assertTrue(error.message!!.contains("Allocation limit"))
+    }
+
     @Test fun splitHonorsJavaScriptLimitsWithoutTruncatingOversizedTables() {
         val entries = "v;".repeat(69_999) + "v"
         for (limit in listOf("", ",undefined", ",70000")) {
@@ -198,6 +263,53 @@ class PlayerProgramTest {
             runtime.invoke(runtime.get(values, "join"), values, listOf(""))
         }
         assertTrue(error.message!!.contains("String size limit"))
+    }
+
+    @Test fun traversalWorkIsBoundedEvenWithoutNewAllocations() {
+        for (operation in listOf("a.join('')", "a.toString()", "a.unshift()", "a.indexOf('missing')")) {
+            val program = compile("if(x.length<4){var a=Array(65536);try{for(var i=0;i<10000;i++){$operation;}}catch(e){return x}}return x;")
+            val error = assertFailsWith<UnsupportedPlayerException>(operation) { program.decipherSignature("abc") }
+            assertTrue(error.message!!.contains(if (operation == "a.join('')") "step limit" else "limit"))
+        }
+        val program = compile("if(x.length<4){var a=large;for(var i=0;i<10000;i++)a.includes('missing')}return x;", extra = "var large='${"a".repeat(65_536)}';")
+        assertFailsWith<UnsupportedPlayerException> { program.decipherSignature("abc") }
+    }
+
+    @Test fun coercionComparisonAndPropertyWorkConsumesTheStepBudget() {
+        val extra = "var digits='${"1".repeat(65_536)}';var other='${"1".repeat(65_535)}2';"
+        for (operation in listOf("Number(digits)", "digits|0", "digits==0", "digits<other", "Math.floor(digits)", "[].slice(digits)", "[digits].indexOf(other)", "({})[digits]")) {
+            val p = compile("if(x.length<5)for(var i=0;i<10000;i++){$operation;}return x;", extra = extra)
+            assertTrue(assertFailsWith<UnsupportedPlayerException>(operation) { p.decipherSignature("evil") }.message!!.contains("step limit"))
+        }
+    }
+
+    @Test fun quadraticStringSearchesFailBeforeEnteringPlatformSearch() {
+        val extra = "var haystack='${"a".repeat(65_536)}';var needle='${"a".repeat(32_767)}b';"
+        for (method in listOf("indexOf", "lastIndexOf", "includes", "split")) {
+            val p = compile("if(x.length<5)haystack.$method(needle);return x;", extra = extra)
+            assertTrue(assertFailsWith<UnsupportedPlayerException>(method) { p.decipherSignature("evil") }.message!!.contains("step limit"))
+        }
+    }
+
+    @Test fun implicitObjectEqualityFailsClosed() {
+        for (expression in listOf("x.split('')==x", "x==x.split('')", "[]==0", "[]==false", "({})=='[object Object]'", "(new Date('1970-01-01T00:00:00Z'))==0", "(new Date('1970-01-01T00:00:00Z'))==false")) {
+            assertFailsWith<UnsupportedPlayerException>(expression) { compile("return ($expression)?x+'!':x;") }
+        }
+        assertEquals("true:false:false:false", compile("var a=[];return [a==a,a==[],a==null,a===x].join(':');").decipherSignature("a"))
+    }
+
+    @Test fun nativeMethodsUseTheInvocationReceiver() {
+        assertEquals("abc:zy", compile("var a=x.split(''),b=['y','z'];a.reverse.call(b);return a.join('')+':'+b.join('');").decipherSignature("abc"))
+        assertEquals("abc:yz!", compile("var a=x.split(''),b=['y','z'];a.push.apply(b,['!']);return a.join('')+':'+b.join('');").decipherSignature("abc"))
+        assertEquals("yz", compile("var a=x.split(''),b=['y','z'];return a.join.call(b,'');").decipherSignature("abc"))
+        assertEquals("z", compile("return x.slice.call('yz',1);").decipherSignature("abc"))
+        assertEquals("121", compile("return x.charCodeAt.call('yz',0).toString();").decipherSignature("abc"))
+        assertEquals("true", compile("var a=x.split(''),f=function(){return this===a};return String(f.call(a));").decipherSignature("abc"))
+        assertEquals("true", compile("var f=function(v){return v===undefined};return String(f.apply(null,[,]));").decipherSignature("abc"))
+        assertEquals("abc?", compile("var f=function(v){return v+'!'},g=function(v){return v+'?'},call=f.call;return call.call(g,null,x);").decipherSignature("abc"))
+        assertEquals("abc?", compile("var f=function(v){return v+'!'},g=function(v){return v+'?'},apply=f.apply;return apply.call(g,null,[x]);").decipherSignature("abc"))
+        assertEquals("caught", compile("try{String.call.call(null)}catch(e){return 'caught'}return x;").decipherSignature("abc"))
+        assertFailsWith<UnsupportedPlayerException> { compile("return x.split('').reverse.call({}).join('');") }
     }
 
     @Test fun externalUpdatesAndCompoundAssignmentsAreRejected() {
@@ -269,6 +381,11 @@ class PlayerProgramTest {
         """.trimIndent()).decipherSignature("x"))
     }
 
+    @Test fun nullEqualityAndNumericWhitespaceMatchJavaScript() {
+        assertEquals("false:false:false:true:false:1:NaN:NaN", compile("return [false==null,0==null,''==null,null==undefined,null===undefined,Number('\\ufeff1'),Number('\\u001c1'),Number('0x\\uff11')].join(':');").decipherSignature("x"))
+        assertEquals("1:1:1:1", compile("return [Number('\\u00a01'),Number('\\u16801'),Number('\\u20001'),Number('\\u202f1')].join(':');").decipherSignature("x"))
+    }
+
     @Test fun assignmentsAndUpdatesEvaluateTheirTargetsOnce() {
         assertEquals("a!b:1", compile("var a=x.split(''),i=0;a[i++] += '!';return a.join('')+':'+i;").decipherSignature("ab"))
         assertEquals("aab:b:1", compile("var a=[{v:'a'},{v:'b'}],i=0;a[i++].v += x;return a[0].v+':'+a[1].v+':'+i;").decipherSignature("ab"))
@@ -278,6 +395,63 @@ class PlayerProgramTest {
         }
         assertEquals("3:2:1", compile("var o={a:2},i=0;var key=function(){i++;return 'a';};var result=o[key()]++;return o.a+':'+result+':'+i;").decipherSignature("ab"))
         assertEquals("ab:b:1", compile("var a=['a','b'],i=0;a[i++]=x;return a.join(':')+':'+i;").decipherSignature("ab"))
+    }
+
+    @Test fun dispatcherFoldingPreservesWritesCapturesAndInputDependentBranches() {
+        val forward = compile("return dispatch(2,3,x);", extra = "var dispatch=function(a,b,x){var before=key,key=a^b;return before+':'+key+':'+x};")
+        assertEquals("undefined:1:z", forward.decipherSignature("z"))
+        val duplicate = compile("return dispatch(2,3,x);", extra = "var dispatch=function(a,b,a){return a+':'+b};")
+        assertEquals("z:3", duplicate.decipherSignature("z"))
+        val mutable = compile("return dispatch(2,3,x);",  extra = "var dispatch=function(a,b,x){var key=a^b;if(x.length<3){a=9;key=8}return (a+b)+':'+key+':'+x};")
+        assertEquals("12:8:y", mutable.decipherSignature("y"))
+        assertEquals("5:1:long", mutable.decipherSignature("long"))
+        val captured = compile("return dispatch(2,3,x);", extra = "var dispatch=function(a,b,x){var key=a^b,change=function(){a=x.length;key++};change();return a+':'+b+':'+key+':'+x};")
+        assertEquals("1:3:2:z", captured.decipherSignature("z"))
+        assertEquals("4:3:2:long", captured.decipherSignature("long"))
+        val shadowed = compile("return dispatch(2,3,x);", extra = "var dispatch=function(a,b,x){var key=a^b;try{throw x}catch(key){return key+':'+a+':'+b}};")
+        assertEquals("z:2:3", shadowed.decipherSignature("z"))
+        val fallback = compile("return dispatch(x.length,3,x);", extra = "var dispatch=function(a,b,x){var key=a^b;return key+':'+x};")
+        for (input in listOf("a", "ab", "abc", "abcd")) assertEquals("${input.length xor 3}:$input", fallback.decipherSignature(input))
+        val global = compile("letters.reverse();return dispatch(2,3,x);", extra = "var letters=['a','b','c'];var dispatch=function(a,b,x){return letters[(a+b)%3]+x};")
+        repeat(3) { assertEquals("az", global.decipherSignature("z")) }
+        assertEquals("2:3:z", compile("return dispatch(2,3,x);", extra = "var dispatch=function(a,b,x){return arguments[0]+':'+arguments[1]+':'+x};").decipherSignature("z"))
+    }
+
+    @Test fun dispatcherFoldingReadsLiveGlobalTables() {
+        val declaration = "var letters='a;b'.split(';');"
+        for ((mutation, expected) in listOf(
+            "letters[1]=x;" to "zz",
+            "if(x)letters[1]=x;" to "zz",
+            "delete letters[1];" to "undefinedz",
+            "++letters[1];" to "NaNz",
+            "var alias=letters;alias[1]=x;" to "zz",
+            "var alias={value:letters};alias.value[1]=x;" to "zz",
+            "letters['reverse']();" to "az",
+            "(letters)[1]=x;" to "zz",
+        )) {
+            val extra = declaration + "var dispatch=function(a,b,x){$mutation return letters[a^b]+x};"
+            assertEquals(expected, compile("return dispatch(2,3,x);", extra = extra).decipherSignature("z"), mutation)
+        }
+        val late = compile("return dispatch(2,3,x);", extra = declaration + "var dispatch=function(a,b,x){if(x.length<3)mutate(x);return letters[a^b]+x};var mutate=function(x){letters[1]=x};")
+        assertEquals("zz", late.decipherSignature("z"))
+        val readOnly = compile("return dispatch(2,3,x);", extra = declaration + "var dispatch=function(a,b,x){return letters[a^b]+x};")
+        for (input in listOf("a", "bc", "arbitrary-input")) assertEquals("b$input", readOnly.decipherSignature(input))
+    }
+
+    @Test fun slotBindingsPreserveCatchAndClosureScopes() {
+        assertEquals("caught:outer:x", compile("var value='outer',fn;try{throw 'caught'}catch(value){fn=function(){return value}}return fn()+':'+value+':'+x;").decipherSignature("x"))
+        assertEquals("abc:2", compile("var i=0,f=function(){i++;return function(){i++;return x+':'+i}};return f()();").decipherSignature("abc"))
+        assertEquals("y:3", compile("var f=function(a,a){return a+':'+arguments.length};return f(x,'y','z');").decipherSignature("abc"))
+    }
+
+    @Test fun forEachFramesDoNotLeakLocalsArgumentsOrCapturedVariables() {
+        assertEquals("onceb", compile("var out=[];x.split('').forEach(function(v,i){var previous;if(i==0)previous='once';out.push(previous===undefined?v:previous)});return out.join('');").decipherSignature("ab"))
+        assertEquals("a1:b1:a2", compile("var out=[];x.split('').forEach(function(v){var count=0;out.push(function(){return v+(++count)})});return out[0]()+':'+out[1]()+':'+out[0]();").decipherSignature("ab"))
+        assertEquals("ab", compile("var out=[];x.split('').forEach(function(){out.push(arguments)});return out[0][0]+out[1][0];").decipherSignature("ab"))
+        assertEquals("caught", compile("try{[].forEach(null)}catch(e){return 'caught'}return x;").decipherSignature("ab"))
+        assertEquals("0:0:0:0", compile("return [Math.floor(null),Math.ceil(null),Math.abs(null),Math.trunc(null)].join(':');").decipherSignature("ab"))
+        assertFailsWith<UnsupportedPlayerException> { compile("return new Date('1970-01-01T00:00:00Z')+x;") }
+        assertFailsWith<UnsupportedPlayerException> { compile("try{return new Date('1970-01-01T00:00:00Z').getTime()+x}catch(e){return x}") }
     }
 
     @Test fun closuresThisAndExceptionSemantics() {

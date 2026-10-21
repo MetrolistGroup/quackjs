@@ -11,6 +11,10 @@ public class PlayerProgram private constructor(
     private val signature: Expr,
     private val nPlan: NPlan,
     private val parsed: Map<String, Expr>,
+    private val templates: Map<String, Any?>,
+    private val dates: Map<String, Double>,
+    private val dispatch: Map<DispatchKey, Block>,
+    private val globalCount: Int,
     public val signatureTimestamp: Int?,
 ) {
     public fun decipherSignature(input: String): String = run(input) { runtime ->
@@ -22,7 +26,7 @@ public class PlayerProgram private constructor(
     private inline fun run(input: String, transform: (Runtime) -> Any?): String {
         if (input.length > 16_384) unsupported("Challenge length limit exceeded")
         try {
-            val output = transform(Runtime(source, parsed).also { it.challenge = input })
+            val output = transform(Runtime(source, parsed, templates, dates, dispatch, globalCount = globalCount).also { it.challenge = input })
             if (output !is String) unsupported("Transform did not return a string")
             if (output.length > 65_536) unsupported("Transform output limit exceeded")
             return output
@@ -43,12 +47,26 @@ public class PlayerProgram private constructor(
             if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
             val signature = Parser(Lexer(derived.signatureExpression).tokens()).completeExpression()
             validateSignatureExpression(signature)
-            val runtime = Runtime(source)
+            val runtime = Runtime(source, recordDispatch = true)
             try {
                 val plan = discoverN(source, derived.nClass, runtime)
                 val result = runtime.expression(signature, mapOf("INPUT" to "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"))
                 if (result !is String) unsupported("Signature transform did not return a string")
-                return PlayerProgram(source, signature, plan, runtime.definitions.toMap(), hints?.signatureTimestamp ?: source.signatureTimestamp)
+                val parsed = runtime.definitions.toMap()
+                val initializer = Runtime(source)
+                val templates = parsed.filterValues(::templateSafe).mapValues { initializer.expression(it.value) }
+                val dispatch = runtime.specializedBodies!!.toMap()
+                val globals = parsed.keys.withIndex().associate { it.value to it.index }
+                val pending = ArrayDeque<Any>()
+                pending.addAll(parsed.values)
+                pending.addAll(listOf(signature, plan.function, plan.constructor, plan.setter))
+                pending.addAll(dispatch.values)
+                while (pending.isNotEmpty()) {
+                    val node = pending.removeLast()
+                    if (node is Id && node.free) node.globalSlot = globals[node.name] ?: -1
+                    syntaxChildren(node) { pending.add(it) }
+                }
+                return PlayerProgram(source, signature, plan, parsed, templates, runtime.constantDates.toMap(), dispatch, globals.size, hints?.signatureTimestamp ?: source.signatureTimestamp)
             } catch (error: JsThrown) {
                 unsupported("Player initialization failed: ${if (error.value is String) error.value.take(160) else "JavaScript exception"}")
             }
@@ -101,6 +119,15 @@ public class PlayerProgram private constructor(
     }
 }
 
+// Cache only closed, side-effect-free initializers. Aliases must still resolve against live globals.
+private fun templateSafe(expr: Expr): Boolean = when (expr) {
+    is Lit, is FunctionExpr -> true
+    is ArrayExpr -> expr.items.all(::templateSafe)
+    is ObjectExpr -> expr.items.all { templateSafe(it.second) }
+    is Call -> !expr.construct && expr.fn is Member && expr.fn.target is Lit && expr.fn.target.value is String && expr.fn.key == Lit("split") && expr.args.all { it is Lit }
+    else -> false
+}
+
 private val RootArgument = Id("<n-root>")
 private fun nArguments(runtime: Runtime, arguments: List<Expr>, root: JsObject): List<Any?> =
     arguments.map { runtime.expression(it, mapOf(RootArgument.name to root)) }
@@ -109,15 +136,15 @@ private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, 
     fun execute(runtime: Runtime, input: String): Any? {
         runtime.challenge = input
         val root = makeRoot(runtime, constructor, mapKey, input, setter)
-        runtime.invoke(JsFunction(function, Env()), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
+        runtime.invoke(runtime.function(function), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
         return (root.fields[mapKey] as? JsObject)?.fields?.get("n") ?: unsupported("n transform removed its result")
     }
 }
 
 private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String?, input: String, setter: FunctionExpr): JsObject {
     val root = JsObject()
-    runtime.invoke(JsFunction(constructor, Env()), root, listOf("", true))
-    root.fields["set"] = JsFunction(setter, Env())
+    runtime.invoke(runtime.function(constructor), root, listOf("", true))
+    root.fields["set"] = runtime.function(setter)
     if (mapKey != null) {
         val map = root.fields[mapKey] as? JsObject ?: unsupported("Unsupported n parameter table")
         map.fields["n"] = input
@@ -160,7 +187,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
         var conflicting = false
         if (candidate.label != "constructor") {
             try {
-                runtime.invoke(JsFunction(candidate.function, Env()), if (candidate.selfRoot) root else Undefined, args)
+                runtime.invoke(runtime.function(candidate.function), if (candidate.selfRoot) root else Undefined, args)
                 val result = (root.fields[mapKey] as? JsObject)?.fields?.get("n")
                 if (result is String && result != probe) {
                     val plan = NPlan(candidate.function, candidate.args, candidate.selfRoot, mapKey, constructor, setter)
@@ -175,10 +202,11 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
         if (conflicting) unsupported("Ambiguous n-table updates")
         if (selected?.first == key) continue
         val cleanRoot = makeRoot(runtime, constructor, mapKey, probe, setter)
-        val env = runtime.functionEnv(JsFunction(candidate.function, Env()), if (candidate.selfRoot) cleanRoot else Undefined, nArguments(runtime, candidate.args, cleanRoot))
+        val env = runtime.functionEnv(runtime.function(candidate.function), if (candidate.selfRoot) cleanRoot else Undefined, nArguments(runtime, candidate.args, cleanRoot))
         val bindings = mutableMapOf<String, Expr>("this" to if (candidate.selfRoot) RootArgument else Lit(Undefined))
         candidate.function.params.forEachIndexed { i, name -> bindings[name] = candidate.args.getOrElse(i) { Lit(Undefined) } }
         // Preserve input-derived expressions while folding the dispatcher prefix.
+        val prefix = mutableSetOf<Vars>()
         for (stmt in candidate.function.body.statements) {
             if (stmt !is Vars) break
             if (stmt.items.any { it.second != null && !constant(it.second!!) }) break
@@ -188,8 +216,16 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
                 else { validateDepth(bound); bindings[name] = bound }
             }
             runtime.exec(stmt, env)
+            prefix.add(stmt)
         }
-        val dynamic = bindings.filterValues(::dependsOnRoot).keys
+        val dynamic = bindings.filterValues(::dependsOnRoot).keys.toMutableSet()
+        var rootWrite = false
+        // Follow reachable dispatcher branches, but never reuse a binding after a possible write.
+        walk(candidate.function.body, runtime, env, dynamic, write = { target ->
+            if (target is Id) { bindings.remove(target.name); dynamic.add(target.name) }
+            else if (target is Member && substitute(target, bindings, env) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
+        }, prefix = prefix) { _, _ -> }
+        if (rootWrite) continue
         walk(candidate.function.body, runtime, env, dynamic) { call, guards ->
             var target = call.fn
             var selfRoot = false
@@ -227,7 +263,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
 private fun constant(expr: Expr): Boolean = when (expr) {
     is Lit, is Id -> true
     is Unary -> expr.op in setOf("!", "~", "+", "-", "typeof", "void") && constant(expr.expr)
-    is Binary -> expr.op !in setOf("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", ">>=", "<<=", ">>>=") && constant(expr.left) && constant(expr.right)
+    is Binary -> expr.op !in assignmentOperators && constant(expr.left) && constant(expr.right)
     is Member -> constant(expr.target) && constant(expr.key)
     is Conditional -> constant(expr.test) && constant(expr.yes) && constant(expr.no)
     else -> false
@@ -237,7 +273,7 @@ private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr?
     fun child(e: Expr): Expr? = substitute(e, bindings, env)
     return when (expr) {
         is Lit -> expr
-        is Id -> bindings[expr.name] ?: expr.takeIf { env.owner(expr.name) == null }
+        is Id -> bindings[expr.name] ?: expr.takeIf { env.owner(expr.name)?.frame == null }
         is Unary -> Unary(expr.op, child(expr.expr) ?: return null)
         is Binary -> Binary(expr.op, child(expr.left) ?: return null, child(expr.right) ?: return null)
         is Member -> Member(child(expr.target) ?: return null, child(expr.key) ?: return null)
@@ -291,8 +327,8 @@ private fun knownTruth(expr: Expr, runtime: Runtime, env: Env, dynamic: Set<Stri
     }
     fun independent(e: Expr): Boolean = when (e) {
         is Lit -> true
-        is Id -> env.owner(e.name)?.values?.get(e.name).let { value ->
-            if (env.owner(e.name) != null) e.name !in dynamic && value !== Undefined && value !is JsObject && value !is JsArray else runtime.source.hasDefinition(e.name)
+        is Id -> env.owner(e.name)?.get(e.name).let { value ->
+            if (env.owner(e.name)?.frame != null) e.name !in dynamic && value !== Undefined && value !is JsObject && value !is JsArray else runtime.source.hasDefinition(e.name)
         }
         is Member -> independent(e.target) && independent(e.key)
         is Unary -> constant(e) && independent(e.expr)
@@ -307,10 +343,10 @@ private data class DiscoveryFlow(val guards: List<Expr> = emptyList(), val exits
     init { if (guards.size > 128) unsupported("n control-flow limit exceeded") }
 }
 
-private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr> = emptyList(), visit: (Call, List<Expr>) -> Unit): DiscoveryFlow {
+private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr> = emptyList(), write: (Expr) -> Unit = {}, prefix: Set<Vars> = emptySet(), visit: (Call, List<Expr>) -> Unit): DiscoveryFlow {
     if (guards.size > 128) unsupported("n control-flow limit exceeded")
-    fun expr(e: Expr, path: List<Expr> = guards) { walkExpression(e, runtime, env, dynamic, path, visit) }
-    fun child(s: Stmt, path: List<Expr> = guards): DiscoveryFlow = walk(s, runtime, env, dynamic, path, visit)
+    fun expr(e: Expr, path: List<Expr> = guards) { walkExpression(e, runtime, env, dynamic, path, write, visit) }
+    fun child(s: Stmt, path: List<Expr> = guards): DiscoveryFlow = walk(s, runtime, env, dynamic, path, write, prefix, visit)
     when (stmt) {
         is Block -> {
             val tail = mutableListOf<Expr>()
@@ -323,7 +359,7 @@ private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, g
             return DiscoveryFlow(tail)
         }
         is ExpressionStmt -> expr(stmt.expr)
-        is Vars -> stmt.items.forEach { it.second?.let { e -> expr(e) } }
+        is Vars -> stmt.items.forEach { (name, value) -> if (value != null) { expr(value); if (stmt !in prefix) write(Id(name)) } }
         is IfStmt -> {
             expr(stmt.test)
             val known = knownTruth(stmt.test, runtime, env, dynamic)
@@ -365,17 +401,18 @@ private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, g
     }
     return DiscoveryFlow()
 }
-private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr>, visit: (Call, List<Expr>) -> Unit) {
+private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr>, write: (Expr) -> Unit, visit: (Call, List<Expr>) -> Unit) {
     if (guards.size > 128) unsupported("n control-flow limit exceeded")
-    fun child(expr: Expr, path: List<Expr> = guards) { walkExpression(expr, runtime, env, dynamic, path, visit) }
+    fun child(expr: Expr, path: List<Expr> = guards) { walkExpression(expr, runtime, env, dynamic, path, write, visit) }
     when (e) {
         is Call -> { visit(e, guards); child(e.fn); e.args.forEach { child(it) } }
-        is Unary -> child(e.expr)
+        is Unary -> { child(e.expr); if (e.op == "delete") write(e.expr) }
         is Binary -> {
             child(e.left)
             val logical = e.op == "&&" || e.op == "||"
             val known = if (logical) knownTruth(e.left, runtime, env, dynamic) else null
             if (!(e.op == "&&" && known == false || e.op == "||" && known == true)) child(e.right, if (logical && known == null) guards + e.left else guards)
+            if (e.op in assignmentOperators) write(e.left)
         }
         is Conditional -> {
             child(e.test)
@@ -385,10 +422,27 @@ private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<Str
             if (known != true) child(e.no, path)
         }
         is Member -> { child(e.target); child(e.key) }
-        is Update -> child(e.target)
+        is Update -> { child(e.target); write(e.target) }
         is ArrayExpr -> e.items.forEach { child(it) }
         is ObjectExpr -> e.items.forEach { child(it.second) }
-        // Nested function bodies have their own parameters and are not discovery roots.
+        is FunctionExpr -> {
+            // A closure can change a substituted outer local before the isolated call.
+            val pending = ArrayDeque<Any>()
+            pending.add(e.body)
+            while (pending.isNotEmpty()) {
+                val node = pending.removeLast()
+                val target = when (node) {
+                    is Binary -> if (node.op in assignmentOperators) node.left else null
+                    is Update -> node.target
+                    is Unary -> if (node.op == "delete") node.expr else null
+                    else -> null
+                }
+                var base = target
+                while (base is Member) base = base.target
+                if (base is Id && base.slot < 0 && target != null) write(target)
+                syntaxChildren(node) { pending.add(it) }
+            }
+        }
         else -> Unit
     }
 }
