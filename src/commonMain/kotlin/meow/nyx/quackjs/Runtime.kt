@@ -14,7 +14,6 @@ internal class Native(val fields: Map<String, Any?> = emptyMap(), val constructi
 internal class JsDate(val time: Double)
 internal class JsThrown(val value: Any?) : Exception()
 private class Returned(val value: Any?)
-private class Reference(val read: () -> Any?, val write: (Any?) -> Unit)
 internal class Env(val parent: Env? = null, private val names: Map<String, Int>? = null) {
     private var entries: MutableMap<String, Any?>? = null
     var revision: Int = 0
@@ -139,11 +138,9 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             }
             is Binary -> {
                 when (expr.op) {
-                    "=" -> { val ref = reference(expr.left, env); val value = eval(expr.right, env); ref.write(value); value }
-                    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> {
-                        val ref = reference(expr.left, env)
-                        val value = binary(expr.op.dropLast(1), ref.read(), eval(expr.right, env))
-                        ref.write(value); value
+                    "=" -> assign(expr.left, env, read = false) { eval(expr.right, env) }
+                    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> assign(expr.left, env, read = true) {
+                        binary(expr.op.dropLast(1), it, eval(expr.right, env))
                     }
                     "&&" -> eval(expr.left, env).let { if (truth(it)) eval(expr.right, env) else it }
                     "||" -> eval(expr.left, env).let { if (truth(it)) it else eval(expr.right, env) }
@@ -174,9 +171,12 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 } else invoke(fn, self, args)
             }
             is Update -> {
-                val ref = reference(expr.target, env)
-                val old = number(ref.read()); val value = old + if (expr.op == "++") 1 else -1
-                ref.write(value); if (expr.prefix) value else old
+                var old = 0.0
+                val value = assign(expr.target, env, read = true) {
+                    old = number(it)
+                    old + if (expr.op == "++") 1 else -1
+                }
+                if (expr.prefix) value else old
             }
             is ArrayExpr -> array(expr.items.map { eval(it, env) })
             is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
@@ -282,22 +282,27 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         return null
     }
-    private fun reference(expr: Expr, env: Env): Reference = when (expr) {
+    // Keep the target and its old value stable across RHS mutations without allocating a reference.
+    private inline fun assign(expr: Expr, env: Env, read: Boolean, value: (Any?) -> Any?): Any? = when (expr) {
         is Id -> {
             if (expr.slot >= 0) {
                 val slots = env.frame!!.slots
-                Reference({ slots[expr.slot] }, { value -> slots[expr.slot] = value })
+                val result = value(if (read) slots[expr.slot] else Undefined)
+                slots[expr.slot] = result
+                result
             } else {
                 val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
-                Reference({ owner[expr.name] }, { value -> owner[expr.name] = value })
+                val result = value(if (read) owner[expr.name] else Undefined)
+                owner[expr.name] = result
+                result
             }
         }
         is Member -> {
             val obj = eval(expr.target, env); val key = eval(expr.key, env)
-            Reference({ property(obj, key) }, { value ->
-                val i = numericIndex(key)
-                if (obj is JsArray && i != null) setIndex(obj, i, value) else set(obj, text(key), value)
-            })
+            val result = value(if (read) property(obj, key) else Undefined)
+            val i = numericIndex(key)
+            if (obj is JsArray && i != null) setIndex(obj, i, result) else set(obj, text(key), result)
+            result
         }
         else -> unsupported("Invalid assignment target")
     }
