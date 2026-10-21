@@ -3391,7 +3391,7 @@ index 5922aefbfd376cf0df48b796da1a00f64be8f028..964cb41e8eeea9d7bed57715b3198760
              )
          return config to aliases
 diff --git a/src/commonMain/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherService.kt b/src/commonMain/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherService.kt
-index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e3436947353102cb50 100644
+index e50a14f78f94a06164f3b8de7bde6636293a65a8..2ba6f0e3e9dd6928d44f66483ca461bef155e4cb 100644
 --- a/src/commonMain/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherService.kt
 +++ b/src/commonMain/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherService.kt
 @@ -2,7 +2,6 @@ package com.metrolist.innertubex.cipher
@@ -3439,7 +3439,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
   */
  class YouTubeCipherService(
      private val httpClient: HttpClient,
-@@ -55,878 +46,270 @@ class YouTubeCipherService(
+@@ -55,878 +46,291 @@ class YouTubeCipherService(
          private const val TAG = "YouTubeCipherService"
          private const val OKHTTP_USER_AGENT = "okhttp/5.4.0"
          private const val MAX_PLAYER_CACHE_ENTRIES = 4
@@ -3586,7 +3586,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                TAG,
 -                "player JS preload done elapsed=${Clock.System.now().toEpochMilliseconds() - startMs}ms player=${playerUrl.logId()}",
 -            )
-+            programFor(canonicalPlayerUrl(playerUrl))
++            programFor(playerUrl)
          } catch (e: CancellationException) {
              throw e
          } catch (e: Exception) {
@@ -3614,11 +3614,10 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -            } catch (_: Exception) {
 -                // The locked solve reports the failure and falls back.
 -            }
-+            logFailure(playerUrl, e)
-         }
+-        }
 -        return true
-     }
-
+-    }
+-
 -    private suspend fun resolveZemerConfig(
 -        configStore: RemotePlayerConfigStore,
 -        playerUrl: String,
@@ -3639,9 +3638,10 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -            throw e
 -        } catch (_: Exception) {
 -            // getOrCreateZemerSolver records the failure cooldown.
--        }
--    }
--
++            logFailure(playerUrl, e)
+         }
+     }
+
 -    /**
 -     * Process streaming data formats and deobfuscate cipher URLs.
 -     *
@@ -3661,10 +3661,10 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
          val approvedUrls = mutableMapOf<String, Boolean>()
 
 -        fun String.isApproved(): Boolean = approvedUrls.getOrPut(this) { isApprovedMediaUrl() }
--
--        fun String.nParameter(): MatchResult? = if (isApproved()) findNParameterInQuery() else null
 +        fun String.approved(): Boolean = approvedUrls.getOrPut(this) { isApprovedMediaUrl() }
 
+-        fun String.nParameter(): MatchResult? = if (isApproved()) findNParameterInQuery() else null
+-
 -        val directNValues =
 -            formats.map {
 -                it.url
@@ -3680,7 +3680,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 +        if (formats.none { !it.signatureCipher.isNullOrBlank() || !it.cipher.isNullOrBlank() || it.url?.nMatch() != null }) {
 +            return formats
 +        }
-+        val program = availableProgram(canonicalPlayerUrl(playerUrl))
++        val program = availableProgram(playerUrl)
          return withContext(Dispatchers.Default) {
 -            withSolverOperation {
 -                val totalStartMs = Clock.System.now().toEpochMilliseconds()
@@ -3790,20 +3790,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                        }
 -                    } else {
 -                        RemoteSolveResult(emptyMap(), emptyMap())
-+            val signatures = mutableMapOf<String, String?>()
-+            val nValues = mutableMapOf<String, String?>()
-+            formats.map { format ->
-+                currentCoroutineContext().ensureActive()
-+                val signatureField = !format.signatureCipher.isNullOrBlank()
-+                val cipher = if (signatureField) format.signatureCipher else format.cipher
-+                var resolved = format
-+                if (!cipher.isNullOrBlank()) {
-+                    val params = parseCipherParams(cipher)
-+                    val url = params?.get("url")
-+                    val signature = params?.get("s")
-+                    if (url == null || !url.approved() || signature == null || !params.hasValidSignatureParameter()) {
-+                        return@map format.copy(url = null)
-                     }
+-                    }
 -
 -                val legacyRemoteSolved =
 -                    solveWithGitHubConfig(
@@ -3892,13 +3879,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                    val url = format.url ?: continue
 -                    val match = url.nParameter() ?: continue
 -                    nTasks.add(NTask(i, url, match))
-+                    val solved = signatures.getOrPut(signature) { transform(program, signature, n = false) }
-+                    val newUrl =
-+                        solved?.let { appendQueryParameterToApprovedUrl(url, params["sp"] ?: "signature", it) }
-+                            ?: return@map format.copy(url = null)
-+                    resolved =
-+                        if (signatureField) format.copy(url = newUrl, signatureCipher = null) else format.copy(url = newUrl, cipher = null)
-                 }
+-                }
 -
 -                if (nTasks.isNotEmpty()) {
 -                    val nChallenges = nTasks.map { it.nValue }.distinct()
@@ -3991,8 +3972,28 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                                "rejecting format with unresolved n itag=${format.itag} player=${playerUrl.logId()}",
 -                            )
 -                        }
--                    }
--                }
++            val signatures = mutableMapOf<String, String?>()
++            val nValues = mutableMapOf<String, String?>()
++            formats.map { format ->
++                currentCoroutineContext().ensureActive()
++                val signatureField = !format.signatureCipher.isNullOrBlank()
++                val cipher = if (signatureField) format.signatureCipher else format.cipher
++                var resolved = format
++                if (!cipher.isNullOrBlank()) {
++                    val params = parseCipherParams(cipher)
++                    val url = params?.get("url")
++                    val signature = params?.get("s")
++                    if (url == null || !url.approved() || signature == null || !params.hasValidSignatureParameter()) {
++                        return@map format.copy(url = null)
+                     }
++                    if (!signatures.containsKey(signature)) signatures[signature] = transform(program, signature, n = false)
++                    val solved = signatures[signature]
++                    val newUrl =
++                        solved?.let { appendQueryParameterToApprovedUrl(url, params["sp"] ?: "signature", it) }
++                            ?: return@map format.copy(url = null)
++                    resolved =
++                        if (signatureField) format.copy(url = newUrl, signatureCipher = null) else format.copy(url = newUrl, cipher = null)
+                 }
 -
 -                // Logging (same as before)
 -                val processedFormats = working.toList()
@@ -4023,10 +4024,16 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                    }} elapsed=${Clock.System.now().toEpochMilliseconds() - totalStartMs}ms player=${playerUrl.logId()}",
 -                )
 -                processedFormats
--            }
--        }
--    }
--
++                val url = resolved.url ?: return@map resolved
++                val match = url.nMatch() ?: return@map resolved
++                val challenge = decodeChallenge(match.groupValues[1]) ?: return@map resolved.copy(url = null)
++                if (!nValues.containsKey(challenge)) nValues[challenge] = transform(program, challenge, n = true)
++                val solved = nValues[challenge]
++                resolved.copy(url = solved?.let { replaceQueryParameterInApprovedUrl(url, match, it) })
+             }
+         }
+     }
+
 -    private suspend fun processFormatWithSolver(
 -        solver: CachedSolver,
 -        format: Format,
@@ -4062,13 +4069,8 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -            val processedUrl = processNParameterWithSolver(solver, url)
 -            if (processedUrl != null) {
 -                return format.copy(url = processedUrl)
-+                val url = resolved.url ?: return@map resolved
-+                val match = url.nMatch() ?: return@map resolved
-+                val challenge = decodeChallenge(match.groupValues[1]) ?: return@map resolved.copy(url = null)
-+                val solved = nValues.getOrPut(challenge) { transform(program, challenge, n = true) }
-+                resolved.copy(url = solved?.let { replaceQueryParameterInApprovedUrl(url, match, it) })
-             }
-         }
+-            }
+-        }
 -
 -        return format
 -    }
@@ -4081,8 +4083,8 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -        val nValue = nMatch.groupValues[1]
 -        val solvedN = solver.nSolver(nValue) ?: return null
 -        return replaceQueryParameter(url, nMatch, solvedN)
-     }
-
+-    }
+-
 -    /**
 -     * Deobfuscate a signature cipher string.
 -     *
@@ -4152,7 +4154,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 +        val url = params["url"]?.takeIf { it.isApprovedMediaUrl() } ?: return null
 +        val signature = params["s"] ?: return null
 +        if (!params.hasValidSignatureParameter()) return null
-+        val program = availableProgram(canonicalPlayerUrl(playerUrl))
++        val program = availableProgram(playerUrl)
 +        return withContext(Dispatchers.Default) {
 +            transform(program, signature, n = false)?.let { appendQueryParameter(url, params["sp"] ?: "signature", it) }
          }
@@ -4170,15 +4172,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
          playerUrl: String,
          url: String,
 -    ): String? = processCanonicalNParameter(canonicalPlayerUrl(playerUrl), url)
-+    ): String? {
-+        val match = url.findNParameter() ?: return null
-+        val challenge = decodeChallenge(match.groupValues[1]) ?: return null
-+        val program = availableProgram(canonicalPlayerUrl(playerUrl))
-+        return withContext(Dispatchers.Default) {
-+            transform(program, challenge, n = true)?.let { replaceQueryParameter(url, match, it) }
-+        }
-+    }
-
+-
 -    private suspend fun processCanonicalNParameter(
 -        playerUrl: String,
 -        url: String,
@@ -4225,24 +4219,13 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                } catch (e: Exception) {
 -                    null
 -                }
-+    private suspend fun transform(
-+        program: PlayerProgram?,
-+        input: String,
-+        n: Boolean,
+-            }
 +    ): String? {
-+        currentCoroutineContext().ensureActive()
-+        if (program == null || input.length > MAX_CHALLENGE_LENGTH) return null
-+        return try {
-+            val output = if (n) program.transformN(input) else program.decipherSignature(input)
-+            currentCoroutineContext().ensureActive()
-+            output.takeUnless {
-+                it.isBlank() || it.length > MAX_SOLVER_OUTPUT_LENGTH ||
-+                    (n && (it == input || it.startsWith("enhanced_except_")))
-             }
-+        } catch (e: CancellationException) {
-+            throw e
-+        } catch (_: Exception) {
-+            null
++        val match = url.findNParameter() ?: return null
++        val challenge = decodeChallenge(match.groupValues[1]) ?: return null
++        val program = availableProgram(playerUrl)
++        return withContext(Dispatchers.Default) {
++            transform(program, challenge, n = true)?.let { replaceQueryParameter(url, match, it) }
          }
 +    }
 
@@ -4255,14 +4238,15 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -        val configStore = remotePlayerConfigStore ?: return RemoteSolveResult(emptyMap(), emptyMap())
 -        val activeConfig = resolveZemerConfig(configStore, playerUrl) ?: return RemoteSolveResult(emptyMap(), emptyMap())
 -        val faradayPlayerUrl = faradayCipherPlayerUrl(playerUrl) ?: return RemoteSolveResult(emptyMap(), emptyMap())
-+    private fun decodeChallenge(value: String): String? =
-+        try {
-+            decodeQueryComponent(value)
-+        } catch (_: URLDecodeException) {
-+            null
-+        }
-
--        return try {
+-
++    private suspend fun transform(
++        program: PlayerProgram?,
++        input: String,
++        n: Boolean,
++    ): String? {
++        currentCoroutineContext().ensureActive()
++        if (program == null || input.length > MAX_CHALLENGE_LENGTH) return null
+         return try {
 -            val solver =
 -                zemerSolverFor(faradayPlayerUrl, activeConfig, configStore.configEpoch)
 -                    ?: return RemoteSolveResult(emptyMap(), emptyMap())
@@ -4280,28 +4264,70 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                            solver.solveN(challenge)?.let { challenge to it }
 -                        }.toMap(),
 -            )
-+    private suspend fun availableProgram(playerUrl: String): PlayerProgram? =
-+        try {
-+            programFor(playerUrl)
++            val output = if (n) program.transformN(input) else program.decipherSignature(input)
++            currentCoroutineContext().ensureActive()
++            output.takeUnless {
++                it.isBlank() || it.length > MAX_SOLVER_OUTPUT_LENGTH ||
++                    (n && (it == input || it.startsWith("enhanced_except_")))
++            }
          } catch (e: CancellationException) {
              throw e
-         } catch (e: Exception) {
+-        } catch (e: Exception) {
 -            logger.d(TAG, "Faraday zemer config failed player=${playerUrl.logId()} type=${e.logType()}")
 -            RemoteSolveResult(emptyMap(), emptyMap())
-+            logFailure(playerUrl, e)
++        } catch (_: Exception) {
 +            null
          }
--    }
+     }
 
 -    private suspend fun solveWithGitHubConfig(
-+    private fun logFailure(
-         playerUrl: String,
+-        playerUrl: String,
 -        sigValues: List<String>,
 -        nValues: List<String>,
 -    ): RemoteSolveResult {
 -        val client = githubPreprocessedPlayer ?: return RemoteSolveResult(emptyMap(), emptyMap())
 -        val result = client.solve(playerUrl, sigValues, nValues)
 -        return RemoteSolveResult(result.sigByChallenge, result.nByChallenge)
+-    }
++    private fun decodeChallenge(value: String): String? =
++        try {
++            decodeQueryComponent(value)
++        } catch (_: URLDecodeException) {
++            null
++        }
+
+-    /** Checks the live solver and failure cooldown before touching the raw player, which may need a download. */
+-    private suspend fun zemerSolverFor(
+-        playerUrl: String,
+-        config: RemotePlayerConfigParser.HardcodedPlayerConfig,
+-        configEpoch: Long,
+-    ): ZemerCipherSolver? {
+-        cacheMutex.withLock {
+-            zemerSolverHitLocked(playerUrl, config)?.let { return it }
+-            if (zemerFailureCoolingLocked(playerUrl, config, configEpoch)) return null
++    private suspend fun availableProgram(playerUrl: String): PlayerProgram? =
++        try {
++            programFor(playerUrl)
++        } catch (e: CancellationException) {
++            throw e
++        } catch (e: Exception) {
++            logFailure(playerUrl, e)
++            null
+         }
+-        return getOrCreateZemerSolver(playerUrl, getOrDownloadPlayerCode(playerUrl).code, config, configEpoch)
+-    }
+
+-    private fun zemerSolverHitLocked(
++    private fun logFailure(
+         playerUrl: String,
+-        config: RemotePlayerConfigParser.HardcodedPlayerConfig,
+-    ): ZemerCipherSolver? {
+-        val cached = zemerCache[playerUrl] ?: return null
+-        // An unrelated table change bumps the epoch; a solver built from this player's identical config is still valid.
+-        if (cached.config != config) return null
+-        zemerCache.remove(playerUrl)
+-        zemerCache[playerUrl] = cached
+-        return cached.solver
 +        error: Exception,
 +    ) {
 +        logger.w(
@@ -4312,12 +4338,15 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 +        )
      }
 
--    /** Checks the live solver and failure cooldown before touching the raw player, which may need a download. */
--    private suspend fun zemerSolverFor(
+-    private fun zemerFailureCoolingLocked(
 -        playerUrl: String,
 -        config: RemotePlayerConfigParser.HardcodedPlayerConfig,
 -        configEpoch: Long,
--    ): ZemerCipherSolver? {
+-    ): Boolean {
+-        val failed = zemerFailures[playerUrl] ?: return false
+-        return failed.configEpoch == configEpoch &&
+-            failed.config == config &&
+-            Clock.System.now().toEpochMilliseconds() - failed.failedAtMs < ZEMER_FAILURE_RETRY_MS
 +    private suspend fun programFor(playerUrl: String): PlayerProgram? {
 +        validatedPlayerScriptUrl(playerUrl)
 +        val generation = cacheMutex.withLock { disposeGeneration }
@@ -4331,45 +4360,19 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 +            }
 +        val hints = config?.let { PlayerHints(it.signatureExpression, it.nClass, it.signatureTimestamp) }
 +        val epoch = store?.configEpoch ?: 0L
-+        val codeUrl = if (hints != null) faradayCipherPlayerUrl(playerUrl) ?: playerUrl else playerUrl
-         cacheMutex.withLock {
--            zemerSolverHitLocked(playerUrl, config)?.let { return it }
--            if (zemerFailureCoolingLocked(playerUrl, config, configEpoch)) return null
-+            programs[codeUrl]?.takeIf { it.hints == hints }?.let {
-+                programs.remove(codeUrl)
-+                programs[codeUrl] = it
-+                return it.program
-+            }
-+            compileFailures[codeUrl]?.let {
-+                if (it.hints == hints && it.configEpoch == epoch && it.failedAt.elapsedNow() < COMPILE_FAILURE_COOLDOWN) return null
-+            }
-         }
--        return getOrCreateZemerSolver(playerUrl, getOrDownloadPlayerCode(playerUrl).code, config, configEpoch)
--    }
--
--    private fun zemerSolverHitLocked(
--        playerUrl: String,
--        config: RemotePlayerConfigParser.HardcodedPlayerConfig,
--    ): ZemerCipherSolver? {
--        val cached = zemerCache[playerUrl] ?: return null
--        // An unrelated table change bumps the epoch; a solver built from this player's identical config is still valid.
--        if (cached.config != config) return null
--        zemerCache.remove(playerUrl)
--        zemerCache[playerUrl] = cached
--        return cached.solver
--    }
--
--    private fun zemerFailureCoolingLocked(
--        playerUrl: String,
--        config: RemotePlayerConfigParser.HardcodedPlayerConfig,
--        configEpoch: Long,
--    ): Boolean {
--        val failed = zemerFailures[playerUrl] ?: return false
--        return failed.configEpoch == configEpoch &&
--            failed.config == config &&
--            Clock.System.now().toEpochMilliseconds() - failed.failedAtMs < ZEMER_FAILURE_RETRY_MS
--    }
--
++        val preferredUrl = (if (hints != null) faradayCipherPlayerUrl(playerUrl) else null) ?: canonicalPlayerUrl(playerUrl)
++        try {
++            programAt(preferredUrl, hints, epoch, generation)?.let { return it }
++        } catch (e: CancellationException) {
++            throw e
++        } catch (e: Exception) {
++            if (preferredUrl == playerUrl) throw e
++            logFailure(preferredUrl, e)
++        }
++        // Faraday's validated variant may disappear or differ from the supplied player's source.
++        return if (preferredUrl == playerUrl) null else programAt(playerUrl, null, epoch, generation)
+     }
+
 -    private suspend fun getOrCreateZemerSolver(
 -        playerUrl: String,
 -        playerCode: String,
@@ -4385,6 +4388,23 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
 -                zemerFailures[playerUrl]?.let { failed ->
 -                    if (failed.config == config && Clock.System.now().toEpochMilliseconds() - failed.failedAtMs < ZEMER_FAILURE_RETRY_MS) {
 -                        return@withLock null
++    private suspend fun programAt(
++        codeUrl: String,
++        hints: PlayerHints?,
++        epoch: Long,
++        generation: Long,
++    ): PlayerProgram? {
++        cacheMutex.withLock {
++            if (generation != disposeGeneration) return null
++            programs[codeUrl]?.takeIf { it.hints == hints }?.let {
++                programs.remove(codeUrl)
++                programs[codeUrl] = it
++                return it.program
++            }
++            compileFailures[codeUrl]?.let {
++                if (it.hints == hints && it.configEpoch == epoch && it.failedAt.elapsedNow() < COMPILE_FAILURE_COOLDOWN) return null
++            }
++        }
 +        // Never hold the CPU-operation lock during network IO: speculative preload must not block playback.
 +        val code = getOrDownloadPlayerCode(codeUrl)
 +        return withContext(Dispatchers.Default) {
@@ -4490,7 +4510,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
                      playerCodeFailures[playerUrl]
                          ?.takeIf { it.elapsedNow() < PLAYER_CODE_FAILURE_COOLDOWN }
                          ?.let { throw IllegalStateException("Player script download recently failed") }
-@@ -938,15 +321,12 @@ class YouTubeCipherService(
+@@ -938,15 +342,12 @@ class YouTubeCipherService(
                      }
                  }
              }
@@ -4509,7 +4529,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
                      currentCoroutineContext().ensureActive()
                      cacheMutex.withLock {
                          if (playerCodeDownloads[playerUrl] === activeDownload) playerCodeDownloads.remove(playerUrl)
-@@ -954,29 +334,32 @@ class YouTubeCipherService(
+@@ -954,29 +355,32 @@ class YouTubeCipherService(
                      continue
                  }
              }
@@ -4554,7 +4574,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
                      }
                  }
                  throw e
-@@ -984,15 +367,6 @@ class YouTubeCipherService(
+@@ -984,15 +388,6 @@ class YouTubeCipherService(
          }
      }
 
@@ -4570,7 +4590,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
      private suspend fun downloadPlayerScript(playerUrl: String): String {
          val validatedUrl = validatedPlayerScriptUrl(playerUrl)
          var lastFailure: Throwable? = null
-@@ -1011,9 +385,7 @@ class YouTubeCipherService(
+@@ -1011,9 +406,7 @@ class YouTubeCipherService(
                          retryable = response.status.value in setOf(408, 425, 429, 500, 502, 503, 504),
                      )
                  lastFailure = failure
@@ -4581,7 +4601,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
              } catch (e: CancellationException) {
                  throw e
              } catch (e: Exception) {
-@@ -1025,97 +397,10 @@ class YouTubeCipherService(
+@@ -1025,97 +418,10 @@ class YouTubeCipherService(
          throw lastFailure ?: IllegalStateException("Player script request failed")
      }
 
@@ -4681,7 +4701,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
              val parts = pair.split("=", limit = 2)
              if (parts.size == 2) {
                  params[parts[0]] =
-@@ -1126,7 +411,6 @@ class YouTubeCipherService(
+@@ -1126,7 +432,6 @@ class YouTubeCipherService(
                      }
              }
          }
@@ -4689,7 +4709,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
          return params
      }
 
-@@ -1141,12 +425,7 @@ class YouTubeCipherService(
+@@ -1141,12 +446,7 @@ class YouTubeCipherService(
          name: String,
          value: String,
      ): String? {
@@ -4703,7 +4723,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
          val fragmentStart = url.indexOf('#').takeIf { it >= 0 } ?: url.length
          val hasQuery = url.indexOf('?').let { it >= 0 && it < fragmentStart }
          val separator =
-@@ -1162,7 +441,7 @@ class YouTubeCipherService(
+@@ -1162,7 +462,7 @@ class YouTubeCipherService(
              append('=')
              append(encodeQueryComponent(value))
              append(url, fragmentStart, url.length)
@@ -4712,7 +4732,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
      }
 
      internal fun replaceQueryParameter(
-@@ -1177,14 +456,9 @@ class YouTubeCipherService(
+@@ -1177,14 +477,9 @@ class YouTubeCipherService(
          value: String,
      ): String? {
          val fragmentStart = url.indexOf('#').takeIf { it >= 0 } ?: url.length
@@ -4729,7 +4749,7 @@ index e50a14f78f94a06164f3b8de7bde6636293a65a8..4740e531793fe85fa56ba7e343694735
      }
 
      private fun String.findNParameter(): MatchResult? = if (isApprovedMediaUrl()) findNParameterInQuery() else null
-@@ -1194,101 +468,39 @@ class YouTubeCipherService(
+@@ -1194,101 +489,39 @@ class YouTubeCipherService(
          return N_PARAMETER_REGEX.find(this)?.takeIf { it.range.first < fragmentStart }
      }
 
@@ -5749,10 +5769,10 @@ index 8ae32a7af18674ae2027e57f5c1072b8703b3e2d..d3ce116d1d1dbac4ba63fd36dd9ed314
      }
 
 diff --git a/src/commonTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceTest.kt b/src/commonTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceTest.kt
-index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d3536621c91d 100644
+index 04e2ca8540faf8341228f70dca1dc56513a337f6..25d36dee61b187e21523041c9fa630056f14ce26 100644
 --- a/src/commonTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceTest.kt
 +++ b/src/commonTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceTest.kt
-@@ -1,136 +1,96 @@
+@@ -1,136 +1,179 @@
  package com.metrolist.innertubex.cipher
 
 -import com.metrolist.innertubex.InnerTubeLogger
@@ -5898,7 +5918,7 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
 
      @Test
 -    fun singleChallengesFallBackToEjsWhenParserInitializationFails() =
-+    fun unsupportedPlayersFailClosedWithoutFallback() =
++    fun suppliedPlayerVariantIsUsedWhenPreferredPlayerIsUnavailableOrUnsupported() =
          runBlocking {
 -            val playerCode =
 -                PLAYER_CODE.replace(
@@ -5910,14 +5930,94 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
 -            val parsed = PlayerScriptParser.parse(playerCode)
 -            assertTrue("helper" in parsed.helperFunctions)
 -            val parserEngine = QuickJsEngine()
--            try {
++            val preferred = "https://www.youtube.com/s/player/12345678/player_ias.vflset/en_GB/base.js"
++            for (suffix in listOf("player_ias.vflset/pl_PL/base.js", "player_es6.vflset/pl_PL/base.js")) {
++                val supplied = "https://www.youtube.com/s/player/12345678/$suffix"
++                for (hinted in listOf(true, false)) {
++                    for (httpFailure in listOf(true, false)) {
++                        val engine =
++                            MockEngine { request ->
++                                when (request.url.toString()) {
++                                    preferred -> {
++                                        if (httpFailure) {
++                                            respond(
++                                                "not found",
++                                                HttpStatusCode.NotFound,
++                                            )
++                                        } else {
++                                            respond("unsupported player")
++                                        }
++                                    }
++
++                                    supplied -> {
++                                        respond(PLAYER_CODE)
++                                    }
++
++                                    else -> {
++                                        error("Unexpected request")
++                                    }
++                                }
++                            }
++                        val client = HttpClient(engine)
++                        val service =
++                            YouTubeCipherService(client, if (hinted) RemotePlayerConfigStore(client, configRepository()) else null)
++                        try {
++                            service.preloadPlayerCode(supplied)
++                            repeat(2) {
++                                assertEquals(
++                                    "$MEDIA_URL?signature=cba",
++                                    service.deobfuscateSignatureCipher(supplied, "s=abc&url=$MEDIA_URL"),
++                                )
++                                assertEquals("$MEDIA_URL?n=value_done", service.processNParameter(supplied, "$MEDIA_URL?n=value"))
++                                val cipher = format(MEDIA_URL).copy(signatureCipher = "s=abc&url=$MEDIA_URL?n=value")
++                                val result = service.processFormats(supplied, listOf(cipher)).single()
++                                assertEquals("cba", Url(result.url!!).parameters["signature"])
++                                assertEquals("value_done", Url(result.url).parameters["n"])
++                            }
++                            val expected = if (hinted || suffix.startsWith("player_ias")) listOf(preferred, supplied) else listOf(supplied)
++                            assertEquals(expected, engine.requestHistory.map { it.url.toString() })
++                        } finally {
++                            service.dispose()
++                            client.close()
++                        }
++                    }
++                }
++            }
++        }
++
++    @Test
++    fun cancelledPreferredDownloadDoesNotTryAnotherVariant() =
++        runBlocking {
++            val started = CompletableDeferred<Unit>()
++            val requests = mutableListOf<String>()
++            val engine =
++                MockEngine { request ->
++                    requests += request.url.encodedPath
++                    started.complete(Unit)
++                    awaitCancellation()
++                }
++            val client = HttpClient(engine)
++            val service = YouTubeCipherService(client, RemotePlayerConfigStore(client, configRepository()))
++            val preload = async { service.preloadPlayerCode("https://www.youtube.com/s/player/12345678/player_es6.vflset/pl_PL/base.js") }
+             try {
 -                parserEngine.initialize()
 -                parserEngine.setupYoutubeGlobals()
 -                assertFailsWith<Exception> { parserEngine.execute(PlayerScriptParser.generateSolverScript(parsed)) }
--            } finally {
++                started.await()
++                preload.cancelAndJoin()
++                assertEquals(listOf("/s/player/12345678/player_ias.vflset/en_GB/base.js"), requests)
+             } finally {
 -                parserEngine.dispose()
--            }
++                preload.cancelAndJoin()
++                service.dispose()
++                client.close()
+             }
 -            val client = HttpClient(MockEngine { respond(playerCode) })
++        }
++
++    @Test
++    fun unsupportedPlayersFailClosedWithoutFallback() =
++        runBlocking {
 +            val engine = MockEngine { respond("function unsupported() { return new Proxy({}, {}); }") }
 +            val client = HttpClient(engine)
              val service = YouTubeCipherService(client)
@@ -5945,7 +6045,7 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
              } finally {
                  service.dispose()
                  client.close()
-@@ -145,11 +105,18 @@ class YouTubeCipherServiceTest {
+@@ -145,11 +188,18 @@ class YouTubeCipherServiceTest {
              try {
                  val direct = format("$MEDIA_URL?direct=1")
                  val valid = format(MEDIA_URL).copy(url = null, signatureCipher = "s=abc&url=$MEDIA_URL")
@@ -5966,7 +6066,7 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
                              } else {
                                  format(MEDIA_URL).copy(cipher = bad)
                              }
-@@ -187,6 +154,7 @@ class YouTubeCipherServiceTest {
+@@ -187,6 +237,7 @@ class YouTubeCipherServiceTest {
                  for (url in unsafe) {
                      val cipher = format(MEDIA_URL).copy(url = null, signatureCipher = "s=abc&url=$url")
                      assertNull(service.processFormats(PLAYER_URL, listOf(cipher)).single().url)
@@ -5974,7 +6074,7 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
                  }
              } finally {
                  service.dispose()
-@@ -194,149 +162,141 @@ class YouTubeCipherServiceTest {
+@@ -194,149 +245,141 @@ class YouTubeCipherServiceTest {
              }
          }
 
@@ -6222,7 +6322,7 @@ index 04e2ca8540faf8341228f70dca1dc56513a337f6..71d4a2a67db189a30412e2aa86b4d353
      }
 
      internal fun format(url: String) = PlayerResponse.StreamingData.Format(itag = 140, url = url, mimeType = "audio/mp4")
-@@ -355,34 +315,16 @@ class YouTubeCipherServiceTest {
+@@ -355,34 +398,16 @@ class YouTubeCipherServiceTest {
      internal companion object {
          const val PLAYER_URL = "https://www.youtube.com/s/player/12345678/player.js"
          const val MEDIA_URL = "https://example.googlevideo.com/videoplayback"
@@ -6403,7 +6503,7 @@ index 50a697d76ad7406aa3c561173b5246c1d277a25d..00000000000000000000000000000000
 -            .toSet()
 -}
 diff --git a/src/desktopTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceJvmTest.kt b/src/desktopTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceJvmTest.kt
-index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc48b5398f 100644
+index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..8baa9fd4f19dcf0af8b5724bd6b4d619ac7b8717 100644
 --- a/src/desktopTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceJvmTest.kt
 +++ b/src/desktopTest/kotlin/com/metrolist/innertubex/cipher/YouTubeCipherServiceJvmTest.kt
 @@ -4,18 +4,9 @@ import com.metrolist.innertubex.InnerTubeLogger
@@ -6425,7 +6525,7 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
  import kotlinx.coroutines.CompletableDeferred
  import kotlinx.coroutines.CoroutineStart
  import kotlinx.coroutines.async
-@@ -24,78 +15,44 @@ import kotlinx.coroutines.cancelAndJoin
+@@ -24,84 +15,97 @@ import kotlinx.coroutines.cancelAndJoin
  import kotlinx.coroutines.runBlocking
  import kotlinx.coroutines.sync.Mutex
  import kotlinx.coroutines.withTimeout
@@ -6495,11 +6595,10 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
 -                    )
 -                }
 -                repeat(3) { solve("local$it") }
-+                repeat(3) { assertNull(service.processNParameter(PLAYER_URL, "$MEDIA_URL?n=challenge")) }
-                 assertEquals(1, failures)
-                 assertTrue(service.refreshAfterStreamRejection())
+-                assertEquals(1, failures)
+-                assertTrue(service.refreshAfterStreamRejection())
 -                solve("changed")
-+                assertNull(service.processNParameter(PLAYER_URL, "$MEDIA_URL?n=challenge"))
++                repeat(3) { assertNull(service.processNParameter(PLAYER_URL, "$MEDIA_URL?n=challenge")) }
                  assertEquals(2, failures)
 -                val failuresByUrl = privateField<Map<String, Any>>(service, "zemerFailures")
 -                val failed = failuresByUrl.values.single()
@@ -6511,11 +6610,67 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
 -                assertEquals(3, failures)
 -                solve("cooldown")
 -                assertEquals(3, failures)
-+                assertEquals(1, privateField<Map<*, *>>(service, "compileFailures").size)
++                assertTrue(service.refreshAfterStreamRejection())
++                assertNull(service.processNParameter(PLAYER_URL, "$MEDIA_URL?n=challenge"))
++                assertEquals(4, failures)
++                assertEquals(2, privateField<Map<*, *>>(service, "compileFailures").size)
              } finally {
                  service.dispose()
                  client.close()
-@@ -126,14 +83,12 @@ class YouTubeCipherServiceJvmTest {
+             }
+         }
+
++    @Test
++    fun failingBatchTransformsExecuteOncePerDistinctChallenge() =
++        runBlocking {
++            for ((signatureFailure, nFailure) in listOf("throw 'unsupported';" to "throw 'unsupported';", "return '';" to "return;")) {
++                val code =
++                    PLAYER_CODE
++                        .replace("return input.split", "if(input=='badSig'){$signatureFailure}return input.split")
++                        .replace("o.set('n',o.V.n + '_done');", "if(o.V.n=='badN'){$nFailure}o.set('n',o.V.n + '_done');")
++                val client = HttpClient(MockEngine { respond(code) })
++                val service = YouTubeCipherService(client)
++                try {
++                    service.preloadPlayerCode(PLAYER_URL)
++                    val cached = privateField<Map<String, Any>>(service, "programs").values.single()
++                    val program = privateField<Any>(cached, "program")
++                    val parsed = privateField<Map<String, Any?>>(program, "parsed")
++                    var executions = 0
++                    // Each transform copies the parsed definitions into its own runtime, including failed transforms.
++                    val counted =
++                        object : Map<String, Any?> by parsed {
++                            override val entries: Set<Map.Entry<String, Any?>> get() {
++                                executions++
++                                return parsed.entries
++                            }
++                        }
++                    program.javaClass
++                        .getDeclaredField("parsed")
++                        .apply { isAccessible = true }
++                        .set(program, counted)
++                    val formats =
++                        List(50) {
++                            listOf(
++                                YouTubeCipherServiceTest().format(MEDIA_URL).copy(signatureCipher = "s=badSig&url=$MEDIA_URL"),
++                                YouTubeCipherServiceTest().format("$MEDIA_URL?n=badN"),
++                            )
++                        }.flatten()
++                    repeat(2) {
++                        executions = 0
++                        assertTrue(service.processFormats(PLAYER_URL, formats).all { it.url == null })
++                        assertEquals(2, executions, "One signature and one n execution per batch, including null results")
++                    }
++                } finally {
++                    service.dispose()
++                    client.close()
++                }
++            }
++        }
++
+     @Test
+     fun cancelledDownloadReleasesWaitersAndReservationUnderLockContention() =
+         runBlocking {
+@@ -126,14 +130,12 @@ class YouTubeCipherServiceJvmTest {
                  mutex.lock()
                  try {
                      owner.cancel()
@@ -6530,7 +6685,7 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
                      assertEquals("retry code", waiter.await())
                      owner.join()
                      assertEquals("retry code", service.playerCode(PLAYER_URL))
-@@ -147,35 +102,55 @@ class YouTubeCipherServiceJvmTest {
+@@ -147,40 +149,60 @@ class YouTubeCipherServiceJvmTest {
          }
 
      @Test
@@ -6578,12 +6733,12 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
 +                service.dispose()
 +                assertTrue(programs.isEmpty())
 +                assertTrue(privateField<Map<*, *>>(service, "playerCodeCache").isEmpty())
-+            } finally {
-+                service.dispose()
-+                client.close()
-+            }
-+        }
-+
+             } finally {
+                 service.dispose()
+                 client.close()
+             }
+         }
+
 +    @Test
 +    fun disposalPreventsInflightPreloadFromRepopulatingCaches() =
 +        runBlocking {
@@ -6606,12 +6761,17 @@ index 09f19430f16a6a2943c1d57ec3a9b3b87983896c..49e85393e82bea8b2fd7492d95c8d2bc
 +                preload.await()
 +                assertTrue(privateField<Map<*, *>>(service, "programs").isEmpty())
 +                assertTrue(privateField<Map<*, *>>(service, "playerCodeCache").isEmpty())
-             } finally {
++            } finally {
 +                preload.cancelAndJoin()
-                 service.dispose()
-                 client.close()
-             }
-@@ -190,8 +165,4 @@ class YouTubeCipherServiceJvmTest {
++                service.dispose()
++                client.close()
++            }
++        }
++
+     @Suppress("UNCHECKED_CAST")
+     private fun <T> privateField(
+         instance: Any,
+@@ -190,8 +212,4 @@ class YouTubeCipherServiceJvmTest {
              .getDeclaredField(name)
              .apply { isAccessible = true }
              .get(instance) as T

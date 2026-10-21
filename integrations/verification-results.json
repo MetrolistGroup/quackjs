@@ -35,19 +35,33 @@
       "log": "/tmp/quackjs-integration-logs/review-quackjs-runtime.log"
     },
     {
+      "directory": "Private InnerTubeX snapshot before the variant/batch fixes",
+      "command": "./gradlew --no-daemon desktopTest --tests '*YouTubeCipherServiceTest.suppliedPlayerVariantIsUsedWhenPreferredPlayerIsUnavailableOrUnsupported*' --tests '*YouTubeCipherServiceJvmTest.failingBatchTransformsExecuteOncePerDistinctChallenge*' --console=plain",
+      "result": "EXPECTED FAILURE",
+      "notes": "Both regressions reproduced: preferred 404 produced null instead of the supported supplied variant; 50 duplicate failing signature/n pairs created 100 runtimes instead of two.",
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-before.log"
+    },
+    {
+      "directory": "Private InnerTubeX snapshot after the variant/batch fixes",
+      "command": "./gradlew --no-daemon desktopTest testAndroidHostTest --tests '*YouTubeCipherService*' --console=plain",
+      "result": "PASS",
+      "notes": "Three added regressions cover preferred 404/unsupported source, IAS/non-IAS supplied variants, hinted/hint-free discovery, preload and single/batch API reuse, cancellation without another download, and actual invocation counts for thrown/blank/unchanged results. Each 100-format failing batch creates exactly two runtimes, independently on repeated calls.",
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-after.log"
+    },
+    {
       "directory": "Private InnerTubeX snapshot",
       "command": "./gradlew --no-daemon clean allTests ktlintCheck apiCheck assemble publishToMavenLocal --no-build-cache --no-configuration-cache --console=plain",
       "result": "PASS",
-      "tests": { "desktopTest": 379, "testAndroidHostTest": 373, "harnessTest": 29, "failures": 0, "skipped": 0 },
+      "tests": { "desktopTest": 382, "testAndroidHostTest": 375, "harnessTest": 29, "failures": 0, "skipped": 0 },
       "notes": "Exact default CI command, no QuackJS opt-in or prepublication. Self-contained :quackjs source module built and published automatically. InnerTubeX public API baseline unchanged; generated :quackjs desktop API baseline also checked. Existing iOS main and test sources compiled; no Apple execution.",
-      "log": "/tmp/quackjs-integration-logs/review-default-innertubex-final.log"
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-full.log"
     },
     {
       "directory": "Private InnerTubeX snapshot",
       "command": "./gradlew --no-daemon -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT -I $Q/integrations/verify-runtime.init.gradle :verifyCipherRuntime publishToMavenLocal --no-configuration-cache --console=plain",
       "result": "PASS",
       "notes": "Actual same-group/version InnerTubeX and quackjs Android/desktop/iOS publications. Metadata inspected: no external meow.nyx SNAPSHOT dependency; quackjs variants depend only on stdlib. Default source builds do not read Maven Local.",
-      "log": "/tmp/quackjs-integration-logs/review-publish-innertubex-2.log"
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-publish.log"
     },
     {
       "directory": "QuackJS",
@@ -55,7 +69,7 @@
       "result": "PASS",
       "tests": { "tests": 2, "failures": 0, "skipped": 0 },
       "notes": "Only published Maven Local InnerTubeX and same-group/version QuackJS artifacts. Four full players, both hinted and hint-free compilation, all 124 independent golden cases repeated in batches per mode, plus single signature/n helpers and one-download reuse. No source substitution or QuickJS dependency.",
-      "log": "/tmp/quackjs-integration-logs/review-published-consumer.log"
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-consumer.log"
     },
     {
       "directory": "Private Metrolist-KMP snapshot",
@@ -63,7 +77,7 @@
       "result": "PASS",
       "tests": { "desktopTest": 1827, "desktopSkipped": 4, "testAndroidHostTest": 1226, "testServerWithoutReflection": 52, "failures": 0 },
       "notes": "Four existing opt-in live-test skips; no assertions or coverage disabled. Fixed an existing backend fixture's unintended global search/song lookups by injecting empty/null results. Full debug APK and desktop assembly succeeded with actual local InnerTubeX and same-group/version QuackJS variants. Legacy default-pin packaging files remain byte-identical to the baseline.",
-      "log": "/tmp/quackjs-integration-logs/review-metrolist-final.log"
+      "log": "/tmp/quackjs-integration-logs/review-variant-batch-metrolist.log"
     },
     {
       "directory": "Private Metrolist-KMP snapshot",
@@ -77,7 +91,7 @@
       "command": "Python zipfile check of the assembled APK: reject quickjs/yt_ejs entry names and com/dokar/quickjs descriptors in every DEX",
       "result": "PASS",
       "artifact": "androidApp/build/outputs/apk/debug/androidApp-debug.apk",
-      "sha256": "ead3b846062f33a9091dd528b410d15521c7de0bb21019f4c7675982aa34531a"
+      "sha256": "9e624b6f4b39c5c5c568b5b1dd051e00e002f7a29b2b078fdcc58adc2a97f185"
     },
     {
       "directory": "QuackJS",
@@ -102,7 +116,9 @@
   "reviewFixes": [
     "Default InnerTubeX/CI/JitPack builds use a checked-in QuackJS source module instead of an unavailable external SNAPSHOT; both modules publish together at matching group/version.",
     "Metrolist's original release handling is retained while its default dependency still uses QuickJS.",
-    "Snapshot verification compares the complete nonexcluded file set and hashes; extra tracked or untracked source files fail."
+    "Snapshot verification compares the complete nonexcluded file set and hashes; extra tracked or untracked source files fail.",
+    "Preferred canonical/Faraday download or compilation failure retries the distinct validated supplied player URL with hint-free discovery; cancellation and disposal do not start a fallback download.",
+    "Batch signature/n maps retain null results by checking key presence, so duplicate thrown, blank and unchanged transforms execute once per unique challenge per batch."
   ],
   "retryNotes": [
     "Initial formatting found correctable Kotlin style issues; fixed without changing meaningful coverage.",
