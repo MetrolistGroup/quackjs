@@ -131,7 +131,9 @@ KMP root, not the repository's aggregate POM. To verify downloaded artifacts,
 pass their Maven group directory and version to the same checker. Sources and
 LICENSE are attached as `-sources.jar` for every publication. Source variants are
 omitted from Gradle metadata because JitPack rewrites their classifier URLs
-incorrectly; the Maven source attachments remain downloadable.
+incorrectly; the Maven source attachments remain downloadable. Native metadata
+also has an unclassified JAR alias so JitPack's rewritten URLs retain the same
+bytes and hashes.
 
 Local publication checks do not prove hosted availability. Before adoption, check
 JitPack metadata and resolve each required platform variant in a fresh external

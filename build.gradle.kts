@@ -37,7 +37,7 @@ kotlin {
     }
 }
 
-val releaseSourcesJar by tasks.registering(Jar::class) {
+val releaseSourcesJar = tasks.register<Jar>("releaseSourcesJar") {
     archiveClassifier.set("sources")
     from(kotlin.sourceSets.commonMain.get().kotlin)
     from("LICENSE")
@@ -59,6 +59,16 @@ publishing.publications.withType<MavenPublication>().configureEach {
         scm {
             url.set("https://github.com/MetrolistGroup/quackjs")
             connection.set("scm:git:https://github.com/MetrolistGroup/quackjs.git")
+        }
+    }
+}
+
+// Wait for Kotlin's publication components to finish their DSL lifecycle.
+gradle.projectsEvaluated {
+    publishing.publications.withType<MavenPublication>().configureEach {
+        // JitPack drops the metadata classifier from URLs; retain a matching unclassified copy.
+        artifacts.filter { it.classifier == "metadata" }.forEach { metadata ->
+            artifact(metadata.file) { builtBy(metadata.buildDependencies) }
         }
     }
 }
