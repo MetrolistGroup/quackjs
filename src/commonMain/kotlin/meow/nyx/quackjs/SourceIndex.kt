@@ -45,6 +45,7 @@ internal class SourceIndex(val source: String, className: String) {
         var braces = 0
         var parens = 0
         var count = 0
+        var callCount = 0
         var previous: String? = null
         var prefixUpdate = false
         val headers = mutableMapOf<Int, Pair<Int, String?>>()
@@ -79,17 +80,20 @@ internal class SourceIndex(val source: String, className: String) {
             }
             if (token.kind == 0 && token.text == "delete") prefixUpdate = true
             if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
-                val lhs = assignmentTarget(recent, call = true, grouped = true)
-                if (lhs != null) recordUpdate(lhs.first().text)
+                val start = assignmentTargetStart(recent, targetEnd(recent), call = true)
+                if (start >= 0) recordUpdate(recent[start].text)
                 prefixUpdate = token.text == "++" || token.text == "--"
             }
             if (token.kind == 0 && token.text == "=") {
-                val lhs = assignmentTarget(recent, grouped = true)
-                if (lhs != null) {
+                val end = targetEnd(recent)
+                val start = assignmentTargetStart(recent, end)
+                if (start >= 0) {
                     if (found.size >= 100_000) unsupported("Source definition limit exceeded")
+                    val lhs = recent.subList(start, end + 1).toList()
                     found.add(Assignment(lhs, token.offset + 1, braces, parens))
-                    if (lhs.size == 3 && lhs[0].text == "g" && lhs[1].text == "." && lhs[2].text == className && braces < classDepth) {
+                    if (classTarget(lhs, className) && braces < classDepth) {
                         classDepth = braces
+                        calls.removeAll { it.braces > classDepth }
                         classParameters = activeScopes.map { it.parameters }
                         classBindings = activeScopes.mapNotNull { it.name }
                         classFunctionScope = activeScopes.lastOrNull()?.depth == braces
@@ -97,15 +101,19 @@ internal class SourceIndex(val source: String, className: String) {
                 }
             }
             if (token.kind == 0 && token.text == "(") {
-                val target = assignmentTarget(recent, call = true)
+                val start = assignmentTargetStart(recent, call = true)
                 val namedFunction = recent.getOrNull(recent.lastIndex - 1)
-                if (target?.singleOrNull()?.text == "function") headers[parens] = token.offset + 1 to null
+                if (start >= 0 && start == recent.lastIndex && recent[start].text == "function") headers[parens] = token.offset + 1 to null
                 else if (namedFunction?.kind == 0 && namedFunction.text == "function") headers[parens] = token.offset + 1 to recent.last().text
-                if (target != null && target.first().text !in nonCalls || target == null && recent.lastOrNull()?.text in listOf(")", "?.")) {
-                    if (calls.size >= 100_000) unsupported("Source call limit exceeded")
-                    val before = target?.let { recent.getOrNull(recent.size - it.size - 1) }
-                    val statement = target != null && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
-                    calls.add(CallSite(target, token.offset + 1, braces, statement))
+                if (start >= 0 && recent[start].text !in nonCalls || start < 0 && recent.lastOrNull()?.text in listOf(")", "?.")) {
+                    if (callCount++ >= 100_000) unsupported("Source call limit exceeded")
+                    // Only call effects at the shallowest class depth can be consumed below.
+                    if (braces <= classDepth) {
+                        val before = recent.getOrNull(start - 1)
+                        val statement = start >= 0 && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
+                        val target = if (start < 0) null else recent.subList(start, recent.size).toList()
+                        calls.add(CallSite(target, token.offset + 1, braces, statement))
+                    }
                 }
             }
             if (token.kind == 0) when (token.text) {
@@ -123,7 +131,7 @@ internal class SourceIndex(val source: String, className: String) {
             previous = token.context
         }
         if (braces != 0 || parens != 0) unsupported("Unbalanced player source")
-        val classes = found.filter { it.lhs.map(Token::text) == listOf("g", ".", className) }
+        val classes = found.filter { classTarget(it.lhs, className) }
         val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$className'")
         val classAssignments = classes.filter { it.braces == depth }
         if (classAssignments.size != 1) unsupported("Ambiguous n class '$className'")
@@ -410,7 +418,7 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     fun classFunction(name: String): FunctionExpr {
-        val entry = assignments.singleOrNull { it.lhs.map(Token::text) == listOf("g", ".", name) }
+        val entry = assignments.singleOrNull { classTarget(it.lhs, name) }
             ?: unsupported("Missing or ambiguous n class '$name'")
         return parseAt(entry.offset) as? FunctionExpr ?: unsupported("Unsupported n class")
     }
@@ -437,27 +445,34 @@ internal class SourceIndex(val source: String, className: String) {
         fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }
         private val nonCalls = setOf("function", "if", "while", "for", "switch", "catch", "with", "typeof", "void", "delete", "return", "throw", "new")
         private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
-        private fun assignmentTarget(tokens: List<Token>, call: Boolean = false, grouped: Boolean = false): List<Token>? {
+        private val targetPrefixes = setOf("var", "let", "const", ";", ",", "{", "}", "(", ")")
+        private val callPrefixes = setOf("=", "return", "new", "(", "?", ":")
+        private fun classTarget(tokens: List<Token>, name: String): Boolean =
+            tokens.size == 3 && tokens[0].text == "g" && tokens[1].text == "." && tokens[2].text == name
+        private fun targetEnd(tokens: List<Token>): Int {
             var end = tokens.lastIndex
-            if (grouped) while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
+            while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
+            return end
+        }
+        private fun assignmentTargetStart(tokens: List<Token>, end: Int = tokens.lastIndex, call: Boolean = false): Int {
             var start = end
-            if (start < 0) return null
+            if (start < 0) return -1
             var brackets = 0
             while (start >= 0) {
                 val token = tokens[start]
-                if (token.kind != 0) { if (brackets == 0) return null; start--; continue }
+                if (token.kind != 0) { if (brackets == 0) return -1; start--; continue }
                 if (token.text == "]") brackets++
                 if (token.text == "[") brackets--
-                if (brackets == 0 && token.text !in listOf(".", "[", "]")) {
-                    if (!identifier(token.text)) return null
+                if (brackets == 0 && token.text != "." && token.text != "[" && token.text != "]") {
+                    if (!identifier(token.text)) return -1
                     if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
                     val before = tokens.getOrNull(start - 1)?.text
-                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(", ")") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
-                    return tokens.subList(start, end + 1).toList()
+                    if (before != null && before !in targetPrefixes && !(call && before in callPrefixes)) return -1
+                    return start
                 }
                 start--
             }
-            return null
+            return -1
         }
     }
 }
