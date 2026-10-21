@@ -13,7 +13,7 @@ internal class JsFunction(val code: FunctionExpr, val env: Env)
 internal class Native(val fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val invoke: (Runtime, Any?, List<Any?>) -> Any?)
 internal class JsDate(val time: Double)
 internal class JsThrown(val value: Any?) : Exception()
-private class Returned(val value: Any?)
+private data object ReturnedNull
 internal class Env(val parent: Env? = null, private val names: Map<String, Int>? = null) {
     private var entries: MutableMap<String, Any?>? = null
     var revision: Int = 0
@@ -221,9 +221,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     val key = if (args.size >= 2 && args[0] is Double && args[1] is Double) DispatchKey(fn.code, args[0] as Double, args[1] as Double) else null
                     val body = if (key == null) fn.code.body else dispatch[key] ?: specializedBodies?.get(key) ?: if (specializedBodies != null && specializedBodies.size < 256) specialize(fn.code, key.first, key.second, this).also { specializedBodies[key] = it } else fn.code.body
                     when (val flow = exec(body, env)) {
-                        is Returned -> flow.value
                         is Jump -> unsupported("Invalid or unsupported jump from transform function")
-                        else -> Undefined
+                        null -> Undefined
+                        ReturnedNull -> null
+                        else -> flow
                     }
                 }
                 else -> throw JsThrown("Value is not callable")
@@ -236,15 +237,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         is JsFunction -> { allocate(1); JsFunction(value.code, global) }
         else -> value
     }
-    // Return and jump are ordinary interpreter control flow, not stack-trace-bearing exceptions.
+    // null means normal completion; returns carry their value (null encoded), jumps carry the AST node.
     fun exec(stmt: Stmt, env: Env): Any? {
         tick()
         when (stmt) {
-            is Block -> for (child in stmt.statements) { val flow = exec(child, env); if (flow != null) return flow }
+            is Block -> for (i in stmt.statements.indices) { val flow = exec(stmt.statements[i], env); if (flow != null) return flow }
             is ExpressionStmt -> { eval(stmt.expr, env) }
-            is Vars -> stmt.items.forEach { (name, expr) -> if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
+            is Vars -> for (i in stmt.items.indices) { val (name, expr) = stmt.items[i]; if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
             is IfStmt -> return if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) }
-            is ReturnStmt -> return Returned(if (stmt.expr == null) Undefined else eval(stmt.expr, env))
+            is ReturnStmt -> return (if (stmt.expr == null) Undefined else eval(stmt.expr, env)) ?: ReturnedNull
             is ThrowStmt -> throw JsThrown(eval(stmt.expr, env))
             is Loop -> {
                 stmt.init?.let { exec(it, env) }
@@ -282,10 +283,13 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 val value = eval(stmt.expr, env)
                 var start = stmt.cases.indexOfFirst { it.first != null && equal(value, eval(it.first!!, env), true) }
                 if (start < 0) start = stmt.cases.indexOfFirst { it.first == null }
-                if (start >= 0) for (i in start until stmt.cases.size) for (child in stmt.cases[i].second) {
-                    val flow = exec(child, env)
-                    if (flow is Jump && !flow.isContinue && flow.label == null) return null
-                    if (flow != null) return flow
+                if (start >= 0) for (i in start until stmt.cases.size) {
+                    val statements = stmt.cases[i].second
+                    for (j in statements.indices) {
+                        val flow = exec(statements[j], env)
+                        if (flow is Jump && !flow.isContinue && flow.label == null) return null
+                        if (flow != null) return flow
+                    }
                 }
             }
             EmptyStmt -> Unit
