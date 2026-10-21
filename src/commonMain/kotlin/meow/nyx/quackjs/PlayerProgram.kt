@@ -101,12 +101,15 @@ public class PlayerProgram private constructor(
     }
 }
 
-private data object RootArgument
-private data class NPlan(val function: FunctionExpr, val arguments: List<Any?>, val selfRoot: Boolean, val mapKey: String, val constructor: FunctionExpr, val setter: FunctionExpr) {
+private val RootArgument = Id("<n-root>")
+private fun nArguments(runtime: Runtime, arguments: List<Expr>, root: JsObject): List<Any?> =
+    arguments.map { runtime.expression(it, mapOf(RootArgument.name to root)) }
+
+private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, val selfRoot: Boolean, val mapKey: String, val constructor: FunctionExpr, val setter: FunctionExpr) {
     fun execute(runtime: Runtime, input: String): Any? {
         runtime.challenge = input
         val root = makeRoot(runtime, constructor, mapKey, input, setter)
-        runtime.invoke(JsFunction(function, Env()), if (selfRoot) root else Undefined, arguments.map { if (it === RootArgument) root else it })
+        runtime.invoke(JsFunction(function, Env()), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
         return (root.fields[mapKey] as? JsObject)?.fields?.get("n") ?: unsupported("n transform removed its result")
     }
 }
@@ -131,28 +134,29 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
     val tables = initial.fields.filterValues { it is JsObject }.keys
     if (tables.size != 1) unsupported("Cannot identify n parameter table")
     val mapKey = tables.single()
-    data class Candidate(val function: FunctionExpr, val args: List<Any?>, val selfRoot: Boolean, val level: Int, val label: String)
+    data class Candidate(val function: FunctionExpr, val args: List<Expr>, val selfRoot: Boolean, val level: Int, val label: String)
+    data class Key(val label: String, val args: List<Expr>, val selfRoot: Boolean)
     val pending = mutableListOf(
-        Candidate(constructor, listOf("", true), true, 0, "constructor"),
-        Candidate(getter, listOf("n"), true, 0, "getter"),
+        Candidate(constructor, listOf(Lit(""), Lit(true)), true, 0, "constructor"),
+        Candidate(getter, listOf(Lit("n")), true, 0, "getter"),
     )
-    val seen = mutableSetOf<String>()
+    val seen = mutableSetOf<Key>()
     val probe = "KdrqFlzJXl9EcCwlmEy"
     var cursor = 0
-    var selected: Pair<String, NPlan>? = null
+    var selected: Pair<Key, NPlan>? = null
     var lastError = "No n-table update found"
     while (cursor < pending.size) {
         if (pending.size > 64) unsupported("n discovery dependency limit exceeded")
         val candidate = pending[cursor++]
         if (candidate.level > 8) continue
-        val key = candidate.label + ":" + candidate.args.joinToString { if (it === RootArgument) "ROOT" else text(it) }
+        val key = Key(candidate.label, candidate.args, candidate.selfRoot)
         if (!seen.add(key)) {
             if (selected?.first == key) unsupported("Ambiguous repeated n-table updates")
             continue
         }
         val root = makeRoot(runtime, constructor, mapKey, probe, setter)
         runtime.challenge = probe
-        val args = candidate.args.map { if (it === RootArgument) root else it }
+        val args = nArguments(runtime, candidate.args, root)
         var conflicting = false
         if (candidate.label != "constructor") {
             try {
@@ -171,29 +175,41 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
         if (conflicting) unsupported("Ambiguous n-table updates")
         if (selected?.first == key) continue
         val cleanRoot = makeRoot(runtime, constructor, mapKey, probe, setter)
-        val env = runtime.functionEnv(JsFunction(candidate.function, Env()), if (candidate.selfRoot) cleanRoot else Undefined, candidate.args.map { if (it === RootArgument) cleanRoot else it })
-        // Dispatcher keys are initialized before the first branch.
+        val env = runtime.functionEnv(JsFunction(candidate.function, Env()), if (candidate.selfRoot) cleanRoot else Undefined, nArguments(runtime, candidate.args, cleanRoot))
+        val bindings = mutableMapOf<String, Expr>("this" to if (candidate.selfRoot) RootArgument else Lit(Undefined))
+        candidate.function.params.forEachIndexed { i, name -> bindings[name] = candidate.args.getOrElse(i) { Lit(Undefined) } }
+        // Preserve input-derived expressions while folding the dispatcher prefix.
         for (stmt in candidate.function.body.statements) {
             if (stmt !is Vars) break
             if (stmt.items.any { it.second != null && !constant(it.second!!) }) break
+            for ((name, expr) in stmt.items) if (expr != null) {
+                val bound = substitute(expr, bindings, env)
+                if (bound == null) bindings.remove(name)
+                else { validateDepth(bound); bindings[name] = bound }
+            }
             runtime.exec(stmt, env)
         }
-        walk(candidate.function.body, runtime, env) { call ->
+        val dynamic = bindings.filterValues(::dependsOnRoot).keys
+        walk(candidate.function.body, runtime, env, dynamic) { call ->
             var target = call.fn
             var selfRoot = false
             var argExprs = call.args
             if (target is Member && target.key == Lit("call") && target.target is Id && argExprs.isNotEmpty()) {
                 if (!constant(argExprs.first())) return@walk
-                selfRoot = try { runtime.eval(argExprs.first(), env) === cleanRoot } catch (_: JsThrown) { false }
+                val self = substitute(argExprs.first(), bindings, env) ?: return@walk
+                if (self != RootArgument && self != Lit(Undefined)) return@walk
+                selfRoot = self == RootArgument
                 argExprs = argExprs.drop(1); target = target.target
             }
             if (target !is Id || call.construct || !argExprs.all(::constant)) return@walk
-            val values = try { argExprs.map { runtime.eval(it, env) } } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
+            val boundArgs = argExprs.map { substitute(it, bindings, env) ?: return@walk }
+            boundArgs.forEach(::validateDepth)
+            val values = try { nArguments(runtime, boundArgs, cleanRoot) } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
             if (!selfRoot && values.none { it === cleanRoot }) return@walk
             if (values.any { it !== cleanRoot && it !is Double && it !is String && it !is Boolean && it !== Undefined && it != null }) return@walk
             val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
             if (fn !is JsFunction) return@walk
-            pending.add(Candidate(fn.code, values.map { if (it === cleanRoot) RootArgument else it }, selfRoot, candidate.level + 1, target.name))
+            pending.add(Candidate(fn.code, boundArgs, selfRoot, candidate.level + 1, target.name))
         }
     }
     return selected?.second ?: unsupported("Cannot isolate n transform: $lastError")
@@ -208,19 +224,41 @@ private fun constant(expr: Expr): Boolean = when (expr) {
     else -> false
 }
 
-private fun knownTruth(expr: Expr, runtime: Runtime, env: Env): Boolean? {
+private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr? {
+    fun child(e: Expr): Expr? = substitute(e, bindings, env)
+    return when (expr) {
+        is Lit -> expr
+        is Id -> bindings[expr.name] ?: expr.takeIf { env.owner(expr.name) == null }
+        is Unary -> Unary(expr.op, child(expr.expr) ?: return null)
+        is Binary -> Binary(expr.op, child(expr.left) ?: return null, child(expr.right) ?: return null)
+        is Member -> Member(child(expr.target) ?: return null, child(expr.key) ?: return null)
+        is Conditional -> Conditional(child(expr.test) ?: return null, child(expr.yes) ?: return null, child(expr.no) ?: return null)
+        else -> null
+    }
+}
+
+private fun dependsOnRoot(expr: Expr): Boolean = when (expr) {
+    is Id -> expr == RootArgument
+    is Unary -> dependsOnRoot(expr.expr)
+    is Binary -> dependsOnRoot(expr.left) || dependsOnRoot(expr.right)
+    is Member -> dependsOnRoot(expr.target) || dependsOnRoot(expr.key)
+    is Conditional -> dependsOnRoot(expr.test) || dependsOnRoot(expr.yes) || dependsOnRoot(expr.no)
+    else -> false
+}
+
+private fun knownTruth(expr: Expr, runtime: Runtime, env: Env, dynamic: Set<String>): Boolean? {
     if (expr is Binary && expr.op == "&&") {
-        val left = knownTruth(expr.left, runtime, env)
-        return if (left == false) false else if (left == true) knownTruth(expr.right, runtime, env) else null
+        val left = knownTruth(expr.left, runtime, env, dynamic)
+        return if (left == false) false else if (left == true) knownTruth(expr.right, runtime, env, dynamic) else null
     }
     if (expr is Binary && expr.op == "||") {
-        val left = knownTruth(expr.left, runtime, env)
-        return if (left == true) true else if (left == false) knownTruth(expr.right, runtime, env) else null
+        val left = knownTruth(expr.left, runtime, env, dynamic)
+        return if (left == true) true else if (left == false) knownTruth(expr.right, runtime, env, dynamic) else null
     }
     fun independent(e: Expr): Boolean = when (e) {
         is Lit -> true
         is Id -> env.owner(e.name)?.values?.get(e.name).let { value ->
-            if (env.owner(e.name) != null) value !== Undefined && value !is JsObject && value !is JsArray else runtime.source.hasDefinition(e.name)
+            if (env.owner(e.name) != null) e.name !in dynamic && value !== Undefined && value !is JsObject && value !is JsArray else runtime.source.hasDefinition(e.name)
         }
         is Member -> independent(e.target) && independent(e.key)
         is Unary -> constant(e) && independent(e.expr)
@@ -231,39 +269,39 @@ private fun knownTruth(expr: Expr, runtime: Runtime, env: Env): Boolean? {
     return try { truth(runtime.eval(expr, env)) } catch (_: UnsupportedPlayerException) { null } catch (_: JsThrown) { null }
 }
 
-private fun walk(stmt: Stmt, runtime: Runtime, env: Env, visit: (Call) -> Unit) {
-    fun expr(e: Expr) { walkExpression(e, runtime, env, visit) }
-    fun child(s: Stmt) { walk(s, runtime, env, visit) }
+private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, visit: (Call) -> Unit) {
+    fun expr(e: Expr) { walkExpression(e, runtime, env, dynamic, visit) }
+    fun child(s: Stmt) { walk(s, runtime, env, dynamic, visit) }
     when (stmt) {
         is Block -> stmt.statements.forEach(::child)
         is ExpressionStmt -> expr(stmt.expr)
         is Vars -> stmt.items.forEach { it.second?.let(::expr) }
         is IfStmt -> {
             expr(stmt.test)
-            val known = knownTruth(stmt.test, runtime, env)
+            val known = knownTruth(stmt.test, runtime, env, dynamic)
             if (known != false) child(stmt.yes)
             if (known != true) stmt.no?.let(::child)
         }
         is ReturnStmt -> stmt.expr?.let(::expr)
         is ThrowStmt -> expr(stmt.expr)
-        is Loop -> { stmt.init?.let(::child); stmt.test?.let(::expr); stmt.update?.let(::expr); if (stmt.test == null || knownTruth(stmt.test, runtime, env) != false) child(stmt.body) }
+        is Loop -> { stmt.init?.let(::child); stmt.test?.let(::expr); stmt.update?.let(::expr); if (stmt.test == null || knownTruth(stmt.test, runtime, env, dynamic) != false) child(stmt.body) }
         is Label -> child(stmt.body)
         is TryStmt -> { child(stmt.body); stmt.handler?.let(::child); stmt.finalizer?.let(::child) }
         is SwitchStmt -> { expr(stmt.expr); stmt.cases.forEach { (key, body) -> key?.let(::expr); body.forEach(::child) } }
         else -> Unit
     }
 }
-private fun walkExpression(e: Expr, runtime: Runtime, env: Env, visit: (Call) -> Unit) {
-    fun child(expr: Expr) { walkExpression(expr, runtime, env, visit) }
+private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, visit: (Call) -> Unit) {
+    fun child(expr: Expr) { walkExpression(expr, runtime, env, dynamic, visit) }
     when (e) {
         is Call -> { visit(e); child(e.fn); e.args.forEach(::child) }
         is Unary -> child(e.expr)
         is Binary -> {
             child(e.left)
-            val known = if (e.op == "&&" || e.op == "||") knownTruth(e.left, runtime, env) else null
+            val known = if (e.op == "&&" || e.op == "||") knownTruth(e.left, runtime, env, dynamic) else null
             if (!(e.op == "&&" && known == false || e.op == "||" && known == true)) child(e.right)
         }
-        is Conditional -> { child(e.test); val known = knownTruth(e.test, runtime, env); if (known != false) child(e.yes); if (known != true) child(e.no) }
+        is Conditional -> { child(e.test); val known = knownTruth(e.test, runtime, env, dynamic); if (known != false) child(e.yes); if (known != true) child(e.no) }
         is Member -> { child(e.target); child(e.key) }
         is Update -> child(e.target)
         is ArrayExpr -> e.items.forEach(::child)

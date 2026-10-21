@@ -4,8 +4,10 @@ package meow.nyx.quackjs
 internal fun validateDepth(root: Expr) {
     val pending = ArrayDeque<Pair<Any, Int>>()
     pending.addLast(root to 0)
+    var nodes = 0
     while (pending.isNotEmpty()) {
         val (node, depth) = pending.removeLast()
+        if (++nodes > 150_000) unsupported("Syntax tree node limit exceeded")
         if (depth > 128) unsupported("Syntax tree depth limit exceeded")
         fun child(value: Any?) { if (value != null) pending.addLast(value to depth + 1) }
         when (node) {

@@ -15,6 +15,7 @@ internal class JsDate(val time: Double)
 internal class JsThrown(val value: Any?) : Exception()
 private class Returned(val value: Any?) : Exception()
 private class Jumped(val jump: Jump) : Exception()
+private class Reference(val read: () -> Any?, val write: (Any?) -> Unit)
 internal class Env(val parent: Env? = null) {
     val values = mutableMapOf<String, Any?>()
     fun owner(name: String): Env? = if (values.containsKey(name)) this else parent?.owner(name)
@@ -81,11 +82,11 @@ internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = empt
             }
             is Binary -> {
                 when (expr.op) {
-                    "=" -> { val ref = reference(expr.left, env); val value = eval(expr.right, env); ref(value); value }
+                    "=" -> { val ref = reference(expr.left, env); val value = eval(expr.right, env); ref.write(value); value }
                     "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> {
                         val ref = reference(expr.left, env)
-                        val value = binary(expr.op.dropLast(1), eval(expr.left, env), eval(expr.right, env))
-                        ref(value); value
+                        val value = binary(expr.op.dropLast(1), ref.read(), eval(expr.right, env))
+                        ref.write(value); value
                     }
                     "&&" -> eval(expr.left, env).let { if (truth(it)) eval(expr.right, env) else it }
                     "||" -> eval(expr.left, env).let { if (truth(it)) it else eval(expr.right, env) }
@@ -113,8 +114,8 @@ internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = empt
             }
             is Update -> {
                 val ref = reference(expr.target, env)
-                val old = number(eval(expr.target, env)); val value = old + if (expr.op == "++") 1 else -1
-                ref(value); if (expr.prefix) value else old
+                val old = number(ref.read()); val value = old + if (expr.op == "++") 1 else -1
+                ref.write(value); if (expr.prefix) value else old
             }
             is ArrayExpr -> array(expr.items.map { eval(it, env) })
             is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
@@ -213,14 +214,14 @@ internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = empt
             EmptyStmt -> Unit
         }
     }
-    private fun reference(expr: Expr, env: Env): (Any?) -> Unit = when (expr) {
+    private fun reference(expr: Expr, env: Env): Reference = when (expr) {
         is Id -> {
-            val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'");
-            { value: Any? -> owner.values[expr.name] = value }
+            val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
+            Reference({ owner.values[expr.name] }, { value -> owner.values[expr.name] = value })
         }
         is Member -> {
-            val obj = eval(expr.target, env); val key = text(eval(expr.key, env));
-            { value: Any? -> set(obj, key, value) }
+            val obj = eval(expr.target, env); val key = text(eval(expr.key, env))
+            Reference({ get(obj, key) }, { value -> set(obj, key, value) })
         }
         else -> unsupported("Invalid assignment target")
     }

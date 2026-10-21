@@ -47,7 +47,7 @@ internal class SourceIndex(val source: String, className: String) {
                 prefixUpdate = token.text == "++" || token.text == "--"
             }
             if (token.kind == 0 && token.text == "=") {
-                val lhs = assignmentTarget(recent.toList())
+                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" })
                 if (lhs != null) {
                     if (found.size >= 100_000) unsupported("Source definition limit exceeded")
                     found.add(Assignment(lhs, token.offset + 1, braces, parens))
@@ -154,7 +154,7 @@ internal class SourceIndex(val source: String, className: String) {
                     if (!identifier.matches(token.text)) return null
                     if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
                     val before = tokens.getOrNull(start - 1)?.text
-                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
+                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
                     return tokens.subList(start, tokens.size).toList()
                 }
                 start--

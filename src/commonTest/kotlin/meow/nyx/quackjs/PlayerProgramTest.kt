@@ -69,6 +69,36 @@ class PlayerProgramTest {
         assertEquals("cba", p.decipherSignature("abc"))
     }
 
+    @Test fun isolatedNHelpersKeepInputDerivedArguments() {
+        val extra = """
+            var rootN=function(o,v,size){o.set('n',v.slice(0,size).split('').reverse().join(''));};
+            var bridge=function(o,v){rootN(o,v,v.length);o.raw.replace('x','y');};
+        """
+        val calls = listOf(
+            "rootN(this,this.V.n,this.V.n.length)" to false,
+            "var value=this.V.n,size=value.length;rootN(this,value,size)" to false,
+            "bridge(this,this.V.n)" to false,
+            "rootN(this,this.V.n,this.V.n.length-1)" to true,
+        )
+        for ((call, trim) in calls) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$call;this.raw.replace('x','y');return this.V[k];")
+            val program = PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345))
+            for (input in listOf("abcdef", "xy", "", "another-challenge")) {
+                assertEquals((if (trim) input.dropLast(1) else input).reversed(), program.transformN(input), call)
+            }
+        }
+        val branching = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", """
+            var value=this.V.n;
+            if(value.length>10)rootN(this,value,value.length);else bridge(this,value);
+            this.raw.replace('x','y');return this.V[k];
+        """.trimIndent())
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(branching, PlayerHints("sig(INPUT)", "C", 12345)) }
+        val doubled = (1..30).joinToString("") { "var v$it=v${it - 1}+v${it - 1};" }
+        val expanding = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v0=this.V.n.length;$doubled rootN(this,this.V.n,v30);this.raw.replace('x','y');return this.V[k];")
+        val error = assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(expanding, PlayerHints("sig(INPUT)", "C", 12345)) }
+        assertTrue(error.message!!.contains("Syntax tree node limit"))
+    }
+
     @Test fun resourceLimitsAreExplicitAndNotCatchableByPlayer() {
         val loop = compile("if(x=='evil'){try{for(;;){}}catch(e){return x;}}return x;")
         assertFailsWith<UnsupportedPlayerException> { loop.decipherSignature("evil") }
@@ -130,6 +160,18 @@ class PlayerProgramTest {
         assertEquals("1abc", compile("return offset+x;", extra = "var offset=1;var unused=function(){offset++;offset+=2;};").decipherSignature("abc"))
     }
 
+    @Test fun parenthesizedGlobalWritesAreNotTreatedAsConstants() {
+        for (write in listOf("(offset=2)", "((offset=2))", "(offset)=2", "((offset))=2", "(0,offset=2)")) {
+            assertFailsWith<UnsupportedPlayerException>(write) {
+                compile("return offset+x;", extra = "var offset=1;$write;")
+            }
+        }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return helper.n+x;", extra = "var helper={n:1};((helper.n))=2;")
+        }
+        assertEquals("1abc", compile("return offset+x;", extra = "var offset=1;var unused=function(){(offset=2);};").decipherSignature("abc"))
+    }
+
     @Test fun blockScopedDeclarationsAreRejectedInsteadOfHoisted() {
         for (keyword in listOf("let", "const")) {
             val error = assertFailsWith<UnsupportedPlayerException> { compile("var k='a';{$keyword k='b'}return k+x;") }
@@ -167,6 +209,17 @@ class PlayerProgramTest {
             a.forEach(function(v){count++});
             return [(4294967297|0),(NaN|0),(-1>>>30),((2+3)*1),Number(''),Number('0x1'),a.indexOf(undefined),count].join(':');
         """.trimIndent()).decipherSignature("x"))
+    }
+
+    @Test fun assignmentsAndUpdatesEvaluateTheirTargetsOnce() {
+        assertEquals("a!b:1", compile("var a=x.split(''),i=0;a[i++] += '!';return a.join('')+':'+i;").decipherSignature("ab"))
+        assertEquals("aab:b:1", compile("var a=[{v:'a'},{v:'b'}],i=0;a[i++].v += x;return a[0].v+':'+a[1].v+':'+i;").decipherSignature("ab"))
+        assertEquals("5:2:1", compile("var a=[1,2],i=0;a[i++] += (a[0]=4);return a.join(':')+':'+i;").decipherSignature("ab"))
+        for ((update, expected) in listOf("a[i++]++" to "4:9:3:1", "++a[i++]" to "4:9:4:1", "a[i++]--" to "2:9:3:1", "--a[i++]" to "2:9:2:1")) {
+            assertEquals(expected, compile("var a=[3,9],i=0,result=$update;return a.join(':')+':'+result+':'+i;").decipherSignature("ab"), update)
+        }
+        assertEquals("3:2:1", compile("var o={a:2},i=0;var key=function(){i++;return 'a';};var result=o[key()]++;return o.a+':'+result+':'+i;").decipherSignature("ab"))
+        assertEquals("ab:b:1", compile("var a=['a','b'],i=0;a[i++]=x;return a.join(':')+':'+i;").decipherSignature("ab"))
     }
 
     @Test fun closuresThisAndExceptionSemantics() {
