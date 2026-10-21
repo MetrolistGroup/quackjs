@@ -190,7 +190,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             runtime.exec(stmt, env)
         }
         val dynamic = bindings.filterValues(::dependsOnRoot).keys
-        walk(candidate.function.body, runtime, env, dynamic) { call ->
+        walk(candidate.function.body, runtime, env, dynamic) { call, guards ->
             var target = call.fn
             var selfRoot = false
             var argExprs = call.args
@@ -209,6 +209,15 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             if (values.any { it !== cleanRoot && it !is Double && it !is String && it !is Boolean && it !== Undefined && it != null }) return@walk
             val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
             if (fn !is JsFunction) return@walk
+            for (guard in guards) {
+                val bound = substitute(guard, bindings, env)
+                if (bound != null) validateDepth(bound)
+                if (bound == null || inputDependentGuard(bound, runtime, mapKey)) {
+                    lastError = "Cannot discard input-dependent n control flow"
+                    return@walk
+                }
+            }
+            if (pending.size >= 64) unsupported("n discovery dependency limit exceeded")
             pending.add(Candidate(fn.code, boundArgs, selfRoot, candidate.level + 1, target.name))
         }
     }
@@ -233,6 +242,7 @@ private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr?
         is Binary -> Binary(expr.op, child(expr.left) ?: return null, child(expr.right) ?: return null)
         is Member -> Member(child(expr.target) ?: return null, child(expr.key) ?: return null)
         is Conditional -> Conditional(child(expr.test) ?: return null, child(expr.yes) ?: return null, child(expr.no) ?: return null)
+        is Call -> Call(child(expr.fn) ?: return null, expr.args.map { child(it) ?: return null }, expr.construct)
         else -> null
     }
 }
@@ -244,6 +254,30 @@ private fun dependsOnRoot(expr: Expr): Boolean = when (expr) {
     is Member -> dependsOnRoot(expr.target) || dependsOnRoot(expr.key)
     is Conditional -> dependsOnRoot(expr.test) || dependsOnRoot(expr.yes) || dependsOnRoot(expr.no)
     else -> false
+}
+
+private fun inputDependentGuard(expr: Expr, runtime: Runtime, mapKey: String): Boolean {
+    fun rootPath(e: Expr): List<String>? {
+        if (e == RootArgument) return emptyList()
+        if (e !is Member) return null
+        val parent = rootPath(e.target) ?: return null
+        if (!constant(e.key) || dependsOnRoot(e.key)) return null
+        val key = try { text(runtime.expression(e.key)) } catch (_: UnsupportedPlayerException) { return null } catch (_: JsThrown) { return null }
+        return parent + key
+    }
+    fun sensitive(e: Expr): Boolean {
+        rootPath(e)?.let { return it.isEmpty() || it.first() == mapKey && (it.size == 1 || it[1] == "n") }
+        return when (e) {
+            is Lit, is Id -> false
+            is Unary -> sensitive(e.expr)
+            is Binary -> sensitive(e.left) || sensitive(e.right)
+            is Member -> sensitive(e.target) || sensitive(e.key)
+            is Conditional -> sensitive(e.test) || sensitive(e.yes) || sensitive(e.no)
+            is Call -> e.fn.let { it is Member && rootPath(it.target)?.isEmpty() == true } || sensitive(e.fn) || e.args.any(::sensitive)
+            else -> true
+        }
+    }
+    return sensitive(expr)
 }
 
 private fun knownTruth(expr: Expr, runtime: Runtime, env: Env, dynamic: Set<String>): Boolean? {
@@ -269,42 +303,90 @@ private fun knownTruth(expr: Expr, runtime: Runtime, env: Env, dynamic: Set<Stri
     return try { truth(runtime.eval(expr, env)) } catch (_: UnsupportedPlayerException) { null } catch (_: JsThrown) { null }
 }
 
-private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, visit: (Call) -> Unit) {
-    fun expr(e: Expr) { walkExpression(e, runtime, env, dynamic, visit) }
-    fun child(s: Stmt) { walk(s, runtime, env, dynamic, visit) }
+private data class DiscoveryFlow(val guards: List<Expr> = emptyList(), val exits: Boolean = false) {
+    init { if (guards.size > 128) unsupported("n control-flow limit exceeded") }
+}
+
+private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr> = emptyList(), visit: (Call, List<Expr>) -> Unit): DiscoveryFlow {
+    if (guards.size > 128) unsupported("n control-flow limit exceeded")
+    fun expr(e: Expr, path: List<Expr> = guards) { walkExpression(e, runtime, env, dynamic, path, visit) }
+    fun child(s: Stmt, path: List<Expr> = guards): DiscoveryFlow = walk(s, runtime, env, dynamic, path, visit)
     when (stmt) {
-        is Block -> stmt.statements.forEach(::child)
+        is Block -> {
+            val tail = mutableListOf<Expr>()
+            for (s in stmt.statements) {
+                val flow = child(s, guards + tail)
+                tail.addAll(flow.guards)
+                if (tail.size > 128) unsupported("n control-flow limit exceeded")
+                if (flow.exits) return DiscoveryFlow(tail, true)
+            }
+            return DiscoveryFlow(tail)
+        }
         is ExpressionStmt -> expr(stmt.expr)
-        is Vars -> stmt.items.forEach { it.second?.let(::expr) }
+        is Vars -> stmt.items.forEach { it.second?.let { e -> expr(e) } }
         is IfStmt -> {
             expr(stmt.test)
             val known = knownTruth(stmt.test, runtime, env, dynamic)
-            if (known != false) child(stmt.yes)
-            if (known != true) stmt.no?.let(::child)
+            if (known == true) return child(stmt.yes)
+            if (known == false) return stmt.no?.let { child(it) } ?: DiscoveryFlow()
+            val path = guards + stmt.test
+            val yes = child(stmt.yes, path)
+            val no = stmt.no?.let { child(it, path) } ?: DiscoveryFlow()
+            val tail = if (yes.exits || no.exits || yes.guards.isNotEmpty() || no.guards.isNotEmpty()) listOf(stmt.test) + yes.guards + no.guards else emptyList()
+            return DiscoveryFlow(tail, yes.exits && no.exits)
         }
-        is ReturnStmt -> stmt.expr?.let(::expr)
-        is ThrowStmt -> expr(stmt.expr)
-        is Loop -> { stmt.init?.let(::child); stmt.test?.let(::expr); stmt.update?.let(::expr); if (stmt.test == null || knownTruth(stmt.test, runtime, env, dynamic) != false) child(stmt.body) }
-        is Label -> child(stmt.body)
-        is TryStmt -> { child(stmt.body); stmt.handler?.let(::child); stmt.finalizer?.let(::child) }
-        is SwitchStmt -> { expr(stmt.expr); stmt.cases.forEach { (key, body) -> key?.let(::expr); body.forEach(::child) } }
+        is ReturnStmt -> { stmt.expr?.let { expr(it) }; return DiscoveryFlow(exits = true) }
+        is ThrowStmt -> { expr(stmt.expr); return DiscoveryFlow(exits = true) }
+        is Jump -> return DiscoveryFlow(exits = true)
+        is Loop -> {
+            stmt.init?.let { child(it) }; stmt.test?.let { expr(it) }
+            val known = stmt.test?.let { knownTruth(it, runtime, env, dynamic) }
+            val path = if (stmt.test != null && known == null) guards + stmt.test else guards
+            stmt.update?.let { expr(it, path) }
+            if (stmt.test == null || known != false) {
+                val body = child(stmt.body, path)
+                if (body.exits || body.guards.isNotEmpty()) return DiscoveryFlow(listOfNotNull(stmt.test) + body.guards)
+            }
+        }
+        is Label -> return child(stmt.body)
+        is TryStmt -> {
+            val body = child(stmt.body)
+            val handler = stmt.handler?.let { child(it, guards + RootArgument) }
+            val finalizer = stmt.finalizer?.let { child(it) }
+            return DiscoveryFlow(body.guards + handler?.guards.orEmpty() + finalizer?.guards.orEmpty(), finalizer?.exits == true || body.exits && (handler == null || handler.exits))
+        }
+        is SwitchStmt -> {
+            expr(stmt.expr)
+            val flows = stmt.cases.map { (key, body) -> key?.let { expr(it) }; child(Block(body), guards + stmt.expr) }
+            val tail = if (flows.any { it.exits || it.guards.isNotEmpty() }) listOf(stmt.expr) + flows.flatMap { it.guards } else emptyList()
+            return DiscoveryFlow(tail, stmt.cases.any { it.first == null } && flows.all { it.exits })
+        }
         else -> Unit
     }
+    return DiscoveryFlow()
 }
-private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, visit: (Call) -> Unit) {
-    fun child(expr: Expr) { walkExpression(expr, runtime, env, dynamic, visit) }
+private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr>, visit: (Call, List<Expr>) -> Unit) {
+    if (guards.size > 128) unsupported("n control-flow limit exceeded")
+    fun child(expr: Expr, path: List<Expr> = guards) { walkExpression(expr, runtime, env, dynamic, path, visit) }
     when (e) {
-        is Call -> { visit(e); child(e.fn); e.args.forEach(::child) }
+        is Call -> { visit(e, guards); child(e.fn); e.args.forEach { child(it) } }
         is Unary -> child(e.expr)
         is Binary -> {
             child(e.left)
-            val known = if (e.op == "&&" || e.op == "||") knownTruth(e.left, runtime, env, dynamic) else null
-            if (!(e.op == "&&" && known == false || e.op == "||" && known == true)) child(e.right)
+            val logical = e.op == "&&" || e.op == "||"
+            val known = if (logical) knownTruth(e.left, runtime, env, dynamic) else null
+            if (!(e.op == "&&" && known == false || e.op == "||" && known == true)) child(e.right, if (logical && known == null) guards + e.left else guards)
         }
-        is Conditional -> { child(e.test); val known = knownTruth(e.test, runtime, env, dynamic); if (known != false) child(e.yes); if (known != true) child(e.no) }
+        is Conditional -> {
+            child(e.test)
+            val known = knownTruth(e.test, runtime, env, dynamic)
+            val path = if (known == null) guards + e.test else guards
+            if (known != false) child(e.yes, path)
+            if (known != true) child(e.no, path)
+        }
         is Member -> { child(e.target); child(e.key) }
         is Update -> child(e.target)
-        is ArrayExpr -> e.items.forEach(::child)
+        is ArrayExpr -> e.items.forEach { child(it) }
         is ObjectExpr -> e.items.forEach { child(it.second) }
         // Nested function bodies have their own parameters and are not discovery roots.
         else -> Unit

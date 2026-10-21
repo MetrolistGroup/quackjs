@@ -19,7 +19,7 @@ internal class SourceIndex(val source: String, className: String) {
         val recent = ArrayDeque<Token>()
         val found = mutableListOf<Assignment>()
         val methodCalls = mutableListOf<Triple<String, Int, Int>>()
-        val updates = mutableListOf<Pair<String, Int>>()
+        val updates = mutableListOf<Triple<String, Int, Boolean>>()
         val stamps = mutableSetOf<Int>()
         var pendingStamp: Int? = null
         var braces = 0
@@ -27,9 +27,9 @@ internal class SourceIndex(val source: String, className: String) {
         var count = 0
         var previous: String? = null
         var prefixUpdate = false
-        fun recordUpdate(name: String) {
+        fun recordUpdate(name: String, member: Boolean) {
             if (updates.size >= 100_000) unsupported("Source mutation limit exceeded")
-            updates.add(name to braces)
+            updates.add(Triple(name, braces, member))
         }
         while (true) {
             val token = lexer.next(previous)
@@ -38,12 +38,16 @@ internal class SourceIndex(val source: String, className: String) {
             if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
             pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
             if (prefixUpdate) {
-                if (token.kind == 0 && identifier.matches(token.text)) { recordUpdate(token.text); prefixUpdate = false }
+                if (token.kind == 0 && identifier.matches(token.text)) {
+                    val next = Lexer(source, token.offset + token.text.length).next(token.context)
+                    recordUpdate(token.text, next.kind == 0 && next.text in listOf(".", "["))
+                    prefixUpdate = false
+                }
                 else if (token.kind != 0 || token.text != "(") prefixUpdate = false
             }
             if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
                 val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" }, call = true)
-                if (lhs != null) recordUpdate(lhs.first().text)
+                if (lhs != null) recordUpdate(lhs.first().text, lhs.size > 1)
                 prefixUpdate = token.text == "++" || token.text == "--"
             }
             if (token.kind == 0 && token.text == "=") {
@@ -82,8 +86,58 @@ internal class SourceIndex(val source: String, className: String) {
         names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
         val writes = found.filter { it.braces == rootBraces }
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
-        mutatedObjects = methodCalls.filter { it.second == rootBraces }.map { it.first }.toSet() + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces }.map { it.first }
+        val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).toMutableSet()
+        val aliases = mutableMapOf<String, MutableSet<String>>()
+        for (write in writes) {
+            if (write.lhs.size != 1) continue
+            val target = referenceBase(write.offset) ?: continue
+            val alias = write.lhs.single().text
+            aliases.getOrPut(alias) { mutableSetOf() }.add(target)
+            aliases.getOrPut(target) { mutableSetOf() }.add(alias)
+        }
+        val queue = ArrayDeque(sharedMutations)
+        while (queue.isNotEmpty()) {
+            for (alias in aliases[queue.removeFirst()].orEmpty()) if (sharedMutations.add(alias)) queue.addLast(alias)
+        }
+        mutatedObjects = sharedMutations + updates.filter { it.second == rootBraces }.map { it.first }
         timestamps = stamps
+    }
+
+    /** Link direct reference paths without evaluating unrelated initializers. */
+    private fun referenceBase(offset: Int): String? {
+        val lexer = Lexer(source, offset)
+        var previous: String? = null
+        var count = 0
+        fun next(): Token? {
+            if (++count > 1024) return null
+            return lexer.next(previous).also { previous = it.context }
+        }
+        var token = next() ?: return null
+        var groups = 0
+        while (token.kind == 0 && token.text == "(") { groups++; token = next() ?: return null }
+        if (token.kind != 0 || !identifier.matches(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
+        val base = token.text
+        token = next() ?: return base
+        while (token.kind == 0 && token.text in listOf(".", "[")) {
+            if (token.text == ".") {
+                token = next() ?: return base
+                if (token.kind != 0 || !identifier.matches(token.text)) return null
+            } else {
+                var depth = 1
+                while (depth > 0) {
+                    token = next() ?: return base
+                    if (token.kind == -1) return null
+                    if (token.kind == 0 && token.text == "[") depth++
+                    if (token.kind == 0 && token.text == "]") depth--
+                }
+            }
+            token = next() ?: return base
+        }
+        while (groups > 0) {
+            if (token.kind != 0 || token.text != ")") return null
+            groups--; token = next() ?: return base
+        }
+        return base.takeIf { token.kind == -1 || token.kind == 0 && token.text in listOf(";", ",", ")", "}") }
     }
 
     fun hasDefinition(name: String): Boolean = names.containsKey(name)

@@ -99,6 +99,64 @@ class PlayerProgramTest {
         assertTrue(error.message!!.contains("Syntax tree node limit"))
     }
 
+    @Test fun nIsolationDoesNotDropInputDependentGuards() {
+        val extra = """
+            var rootN=function(o){o.set('n',o.V.n.split('').reverse().join(''));};
+            var check=function(o){return o.V.n.length>10;};
+            var bridge=function(o){if(o.V.n.length>10)rootN(o);o.raw.replace('x','y');};
+        """
+        val bodies = listOf(
+            "if(this.V.n.length>10)rootN(this);",
+            "this.V.n.length>10&&rootN(this);",
+            "this.V.n.length<=10||rootN(this);",
+            "this.V.n.length>10?rootN(this):null;",
+            "var value=this.V.n;if(value.length>10)rootN(this);",
+            "if(check(this))rootN(this);",
+            "if(this.V.n.length<=10)return this.V[k];rootN(this);",
+            "if(true){if(this.V.n.length<=10)return this.V[k];}rootN(this);",
+            "while(this.V.n.length>10){rootN(this);break;}",
+            "switch(this.V.n.length){case 19:case 24:rootN(this);break;}",
+            "bridge(this);",
+            "return this.V[k];rootN(this);",
+        )
+        for (body in bodies) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
+            assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+        }
+        val supported = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "if(this.V.n.length>10)rootN(this);return this.V[k];")
+        val program = PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345))
+        assertEquals("abc", program.transformN("abc"))
+        assertEquals("lkjihgfedcba", program.transformN("abcdefghijkl"))
+        val constant = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "if(7==7)rootN(this);this.raw.replace('x','y');return this.V[k];")
+        assertEquals("cba", PlayerProgram.compile(constant, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
+        val manyGuards = "if(this.raw)return this.V[k];".repeat(130)
+        val bounded = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$manyGuards rootN(this);this.raw.replace('x','y');return this.V[k];")
+        val error = assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(bounded, PlayerHints("sig(INPUT)", "C", 12345)) }
+        assertTrue(error.message!!.contains("n control-flow limit"))
+    }
+
+    @Test fun mutationsThroughObjectAliasesAreRejected() {
+        val signature = "var a=x.split('');helper.f(a);return a.join('');"
+        val helper = "var helper={f:function(a){a.reverse()}};"
+        for (mutation in listOf(
+            "var alias=helper;alias.f=function(a){a.shift()};",
+            "var alias=((helper)),second=alias;second['f']=function(a){a.shift()};",
+            "var alias=helper;alias.f.call=function(){};",
+            "var alias=helper;alias.f([]);",
+        )) assertFailsWith<UnsupportedPlayerException>(mutation) { compile(signature, extra = helper + mutation) }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("var a=x.split('');helper.nested.f(a);return a.join('');", extra = "var helper={nested:{f:function(a){a.reverse()}}};var alias=helper['nested'];alias.f=function(a){a.shift()};")
+        }
+        for (update in listOf("alias.counter++", "++alias.counter", "--alias['counter']", "(alias.counter)++", "alias.counter+=2")) {
+            assertFailsWith<UnsupportedPlayerException>(update) { compile("return helper.counter+x;", extra = "var helper={counter:1};var alias=helper;$update;") }
+        }
+        val chain = (1..1000).joinToString("") { "var alias$it=alias${it - 1};" }
+        assertFailsWith<UnsupportedPlayerException> { compile(signature, extra = helper + "var alias0=helper;" + chain + "alias1000.f=function(a){a.shift()};") }
+        assertEquals("cba", compile(signature, extra = helper + "var alias=helper;").decipherSignature("abc"))
+        assertEquals("cba", compile("var a=x.split('');alias.f(a);return a.join('');", extra = helper + "var alias=helper;").decipherSignature("abc"))
+        assertEquals("1abc", compile("return offset+x;", extra = "var offset=1;var alias=offset;alias++;").decipherSignature("abc"))
+    }
+
     @Test fun resourceLimitsAreExplicitAndNotCatchableByPlayer() {
         val loop = compile("if(x=='evil'){try{for(;;){}}catch(e){return x;}}return x;")
         assertFailsWith<UnsupportedPlayerException> { loop.decipherSignature("evil") }
