@@ -37,7 +37,7 @@ node scripts/player-oracle.mjs
 # Deliberate regeneration using the complete original JS, never PlayerProgram.
 node scripts/player-oracle.mjs --write
 
-# Default: original QuickJS oracle now; automatically includes Kotlin parity when core sources land.
+# Full Kotlin parity plus the original QuickJS oracle.
 ./gradlew jvmTest --rerun-tasks
 
 # Force the independent native QuickJS cross-check even after core integration.
@@ -82,14 +82,10 @@ corpus, not arbitrary untrusted scripts.
 `PlayerParityTest` targets the `DESIGN.md` public API, compiles each original
 source with its `PlayerHints`, checks `signatureTimestamp`, and compares every
 output while reusing the program in forward/reverse/forward order. It never
-uses Kotlin results to generate goldens. Hint-free discovery is not tested.
-While `src/commonMain/kotlin` contains no Kotlin sources, the default JVM test
-source set excludes the two files that reference the pending core API
-(`PlayerParityTest.kt`, `PlayerBenchmark.kt`) and announces oracle-only mode.
-Adding any core Kotlin source automatically enables both files, so absent or
-broken public API declarations then fail compilation rather than silently
-skipping parity. `-PoracleOnly` explicitly excludes the same two files even
-after integration. Neither oracle-only mode is a library parity pass.
+uses Kotlin results to generate goldens. The separate published InnerTubeX
+consumer also checks all four players with and without hints. Concurrency tests
+exercise shared compiled programs. `-PoracleOnly` explicitly excludes the parity
+and benchmark sources; that opt-in mode is not a library parity pass.
 
 ## Re-fetching a fixture
 
@@ -117,9 +113,8 @@ oracle changes together when intentionally rotating the corpus.
 ./gradlew playerBenchmark --console=plain | tee /tmp/quackjs-benchmark.txt
 ```
 
-The task uses only JVM test sources/dependencies and fails clearly if core
-sources are absent or `-PoracleOnly` is supplied. Before printing any
-measurements it checks all original-player
+The task uses only JVM test sources/dependencies and rejects `-PoracleOnly`.
+Before printing any measurements it checks all original-player
 goldens against both implementations. Every timed sample's complete output is
 also compared outside the timer; mismatches abort the run, not get skipped.
 There are no performance thresholds or unmeasured speed claims.
@@ -152,7 +147,7 @@ There are no performance thresholds or unmeasured speed claims.
   concurrent load, energy, or retained memory; GC and host scheduling remain
   possible sources of noise. There is no forced GC between samples.
 
-## Checks performed in the verification lane
+## Historical checks performed before core integration
 
 Environment: Node v26.11.1; Temurin OpenJDK 21.0.12.1+1-LTS; Linux
 7.2.11-1-cachyos x86_64; AMD Ryzen 9 7950X3D, 32 available logical CPUs.
@@ -167,7 +162,24 @@ Environment: Node v26.11.1; Temurin OpenJDK 21.0.12.1+1-LTS; Linux
 | `./gradlew playerBenchmark` | Correctly rejects missing commonMain core with an explicit integration error |
 | Full Kotlin-vs-QuickJS benchmark | Not run: separate core lane has not supplied `PlayerProgram`/`PlayerHints`; **no comparative timing numbers available** |
 
-Do not interpret the oracle-only pass as Kotlin correctness or benchmark
-readiness. After integration, run the complete JVM suite and the benchmark
-without `-PoracleOnly`, retain real output, and update this status before
-claiming parity or performance. No production API stubs were added.
+These are historical lane results, not the final state. No production API stubs
+were added.
+
+## Final combined verification
+
+After integrating and fixing the final empty/sparse `forEach` frame regression:
+
+- `./gradlew --no-daemon jvmTest testAndroidHostTest linuxX64Test assemble publishToMavenLocal --console=plain`: passed, 49 JVM, 43 Android-host and 43 Linux tests, no skips/failures. Log `/tmp/quackjs-combined-tests.log`.
+- `node scripts/player-oracle.mjs`: passed, all 124 goldens, hashes and fresh-context repetitions.
+- `python3 integrations/verify-quackjs-publication.py`: passed, six stdlib-only KMP publications; 71 Java-17 classes in JVM/Android artifacts, no JS/native payload.
+- Production runtime graph check: passed, no QuickJS on Android/JVM (`/tmp/quackjs-combined-runtime.log`).
+- Two complete benchmark executions: passed parity and timed-output checks. [Results](benchmark.md) include both runs, including the warm regression.
+- The exact final six-file core was synchronized into the isolated InnerTubeX module and verified by SHA-256. The generated API baseline changed only for the private constructor's synthetic JVM bridge; the public Kotlin API and InnerTubeX API stayed unchanged.
+- InnerTubeX desktop/Android-host/harness tests, formatting, API checks, assembly and local publication passed. Its invocation-count regression test was updated to observe lazy function resolution rather than the removed per-call map copy. Log `/tmp/quackjs-combined-innertubex.log`.
+- Published-artifact consumer passed all four players with and without hints (`/tmp/quackjs-combined-consumer.log`).
+- Metrolist shared desktop/Android-host tests, Android debug APK and desktop assembly passed against the final local publication (`/tmp/quackjs-combined-metrolist.log`).
+
+See [integration instructions](integration.md) for exact consumer commands and
+snapshot safety. These builds are not live CDN/device tests. Apple sources and
+metadata compile on this host; simulator execution and final Apple linking were
+not checked.

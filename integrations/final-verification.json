@@ -1,0 +1,62 @@
+{
+  "dateUtc": "2026-10-21",
+  "coreCommit": "a7e66f5",
+  "scope": "Combined optimized core and isolated consumer migrations; originals untouched",
+  "quackjs": {
+    "jvmTests": 49,
+    "androidHostTests": 43,
+    "linuxNativeTests": 43,
+    "failures": 0,
+    "skipped": 0,
+    "realPlayers": 4,
+    "independentGoldenCases": 124,
+    "productionDependencies": "Kotlin stdlib only",
+    "publishedBytecodeMajor": 61,
+    "log": "/tmp/quackjs-combined-tests.log"
+  },
+  "innertubex": {
+    "vendoredCoreFiles": 6,
+    "desktopTests": 382,
+    "androidHostTests": 375,
+    "harnessTests": 29,
+    "failures": 0,
+    "apiCheck": "PASS; InnerTubeX public API unchanged",
+    "coreApiUpdate": "Generated baseline updated for private constructor synthetic JVM bridge only",
+    "ktlintCheck": "PASS",
+    "assembleAndLocalPublication": "PASS",
+    "runtimeGraph": "No QuickJS on Android or desktop",
+    "log": "/tmp/quackjs-combined-innertubex.log"
+  },
+  "publishedConsumer": {
+    "tests": 2,
+    "failures": 0,
+    "coverage": "Four full players, hints and hint-free discovery, all goldens, public InnerTubeX service using published artifacts only",
+    "log": "/tmp/quackjs-combined-consumer.log"
+  },
+  "metrolist": {
+    "desktopTests": 1827,
+    "desktopSkipped": 4,
+    "androidHostTests": 1226,
+    "serverTests": 52,
+    "failures": 0,
+    "builds": "Android debug APK and desktop assemble passed",
+    "runtimeGraph": "Selected local InnerTubeX publication has no QuickJS",
+    "apkQuickJsEjsPayload": "Absent; ZIP names and all DEX checked",
+    "apkSha256": "0918fe57ebe43670a26be6cfd7f9874f83540f0fa518297ff97d392fa6fd76c5",
+    "log": "/tmp/quackjs-combined-metrolist.log"
+  },
+  "benchmark": {
+    "runs": 2,
+    "report": "../docs/benchmark.md",
+    "coldSpeedup": "2.0–2.3x",
+    "warmResult": "Near parity; 6% slower to 21% faster across players/runs"
+  },
+  "notChecked": [
+    "Live CDN playback",
+    "Android device/emulator execution",
+    "Apple execution and final linking",
+    "Desktop release shrinker/distributable",
+    "Remote publication",
+    "Universal historical/future player compatibility"
+  ]
+}
