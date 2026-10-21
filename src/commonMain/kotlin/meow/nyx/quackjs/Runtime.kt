@@ -47,6 +47,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         if (allocated > 2_000_000) unsupported("Allocation limit exceeded")
     }
     fun array(items: List<Any?>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
+    private fun arrayRange(items: List<Any?>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
     fun string(value: String): String { allocate(value.length); return value }
     private fun number(value: Any?): Double { if (value is String) tick(value.length); return meow.nyx.quackjs.number(value) }
     private fun int(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.int(value) }
@@ -428,18 +429,35 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 r.string(result.toString())
             }
             "push" -> Native { r, self, a -> val v = arrayValues(self); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); v.size.toDouble() }
-            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(0, a); v.size.toDouble() }
+            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); v.size.toDouble() }
             "pop" -> Native { _, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
             "shift" -> Native { r, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else { r.tick(v.size); v.removeAt(0).let { if (it === Hole) Undefined else it } } }
-            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); r.tick(end.coerceAtLeast(start) - start); r.array(v.subList(start, end.coerceAtLeast(start))) }
+            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); val count = (end - start).coerceAtLeast(0); r.tick(count); r.arrayRange(v, start, count) }
             "splice" -> Native { r, self, a ->
                 val v = arrayValues(self)
                 val start = r.relative(a.getOrElse(0) { 0.0 }, v.size)
                 val count = if (a.isEmpty()) 0 else if (a.size < 2) v.size - start else r.integer(a[1]).coerceIn(0, v.size - start)
-                val added = a.drop(2)
-                if (v.size - count + added.size > 65_536) unsupported("Array size limit exceeded")
-                val removed = r.array(v.subList(start, start + count)); r.allocate(added.size); r.tick(v.size)
-                v.subList(start, start + count).clear(); v.addAll(start, added); removed
+                val added = (a.size - 2).coerceAtLeast(0)
+                if (v.size - count + added > 65_536) unsupported("Array size limit exceeded")
+                val removed = r.arrayRange(v, start, count); r.allocate(added); r.tick(v.size)
+                val change = added - count
+                when {
+                    count == v.size && added == 0 -> v.clear()
+                    count == 1 && added == 0 -> v.removeAt(start)
+                    count == 0 && added == 1 -> v.add(start, a[2])
+                    else -> {
+                        if (change < 0) {
+                            for (i in start + count until v.size) v[i + change] = v[i]
+                            repeat(-change) { v.removeAt(v.lastIndex) }
+                        } else if (change > 0) {
+                            val size = v.size
+                            repeat(change) { v.add(Hole) }
+                            for (i in size - 1 downTo start + count) v[i + change] = v[i]
+                        }
+                        for (i in 0 until added) v[start + i] = a[i + 2]
+                    }
+                }
+                removed
             }
             "forEach" -> Native { r, self, a ->
                 val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
