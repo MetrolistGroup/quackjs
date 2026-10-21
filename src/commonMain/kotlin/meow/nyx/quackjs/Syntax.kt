@@ -153,6 +153,7 @@ internal class FunctionExpr(val params: List<String>, val body: Block, val name:
     val nameSlot: Int
     val usesArguments: Boolean
     val hasClosures: Boolean
+    val hotCharacterPlan: HotCharacterPlan?
     init {
         val names = mutableSetOf<String>()
         val ids = mutableListOf<Id>()
@@ -183,6 +184,7 @@ internal class FunctionExpr(val params: List<String>, val body: Block, val name:
         }
         usesArguments = arguments
         hasClosures = closures
+        hotCharacterPlan = HotCharacterPlan.compile(this)
     }
 }
 internal data class RegexValue(val source: String)
