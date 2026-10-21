@@ -7,9 +7,9 @@ Source: [MetrolistGroup/quackjs](https://github.com/MetrolistGroup/quackjs).
 ## Install with JitPack
 
 ```kotlin
-repositories {
-    mavenCentral()
-    maven("https://jitpack.io")
+// settings.gradle.kts, alongside your existing repositories:
+dependencyResolutionManagement {
+    repositories { maven("https://jitpack.io") }
 }
 // KMP commonMain dependencies:
 implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.0")

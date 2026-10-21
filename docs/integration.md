@@ -8,13 +8,24 @@ QuackJS sources are required.
 
 ## Dependency
 
-Add JitPack to the consumer's dependency repositories and QuackJS to `commonMain`:
+Add JitPack to `dependencyResolutionManagement.repositories` in
+`settings.gradle.kts`, retaining `google()` and `mavenCentral()`. InnerTubeX uses
+`FAIL_ON_PROJECT_REPOS`, so do not add repositories to `build.gradle.kts`.
 
 ```kotlin
-repositories {
-    mavenCentral()
-    maven("https://jitpack.io")
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
 }
+```
+
+Add QuackJS to `commonMain` in `build.gradle.kts`:
+
+```kotlin
 kotlin {
     sourceSets.commonMain.dependencies {
         implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.0")
