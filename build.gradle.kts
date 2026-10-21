@@ -20,6 +20,8 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
     jvmToolchain(21)
+    // JitPack drops classifiers from source-variant URLs; publish sources as Maven attachments instead.
+    withSourcesJar(publish = false)
     sourceSets {
         commonTest.dependencies { implementation(kotlin("test")) }
         jvmTest {
@@ -35,7 +37,14 @@ kotlin {
     }
 }
 
+val releaseSourcesJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("sources")
+    from(kotlin.sourceSets.commonMain.get().kotlin)
+    from("LICENSE")
+}
+
 publishing.publications.withType<MavenPublication>().configureEach {
+    artifact(releaseSourcesJar)
     pom {
         name.set("QuackJS")
         description.set("Kotlin-only YouTube player signature deciphering and n transforms")

@@ -17,7 +17,8 @@ modules = ["quackjs", "quackjs-jvm", "quackjs-android", "quackjs-iosarm64", "qua
 for module in modules:
     metadata = root / module / version / f"{module}-{version}.module"
     data = json.loads(metadata.read_text())
-    assert data["component"]["group"] == group, data["component"]
+    # JitPack rewrites the owning component to its aggregate group, but keeps target links in the KMP group.
+    assert data["component"]["group"] in (group, "com.github.MetrolistGroup"), data["component"]
     assert data["component"]["module"] == "quackjs", data["component"]
     if module != "quackjs":
         owner = metadata.parent / data["component"]["url"]
@@ -38,7 +39,12 @@ for module in modules:
                 assert hashlib.sha256(payload.read_bytes()).hexdigest() == artifact["sha256"], payload
         for dependency in variant.get("dependencies", []):
             assert (dependency["group"], dependency["module"]) == ("org.jetbrains.kotlin", "kotlin-stdlib"), dependency
-    print(f"VERIFIED stdlib-only metadata: {module}")
+    sources = metadata.parent / f"{module}-{version}-sources.jar"
+    with zipfile.ZipFile(sources) as archive:
+        assert archive.testzip() is None, sources
+        assert "LICENSE" in archive.namelist(), sources
+        assert any(name.endswith("/PlayerProgram.kt") for name in archive.namelist()), sources
+    print(f"VERIFIED stdlib-only metadata and sources: {module}")
 
 
 def check_classes(archive):
