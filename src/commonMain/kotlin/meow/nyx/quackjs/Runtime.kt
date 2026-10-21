@@ -429,8 +429,16 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 if (callback !is JsFunction && callback !is Native) throw JsThrown("Invalid forEach callback")
                 val selfArg = a.getOrElse(1) { Undefined }
                 // Without closures or arguments, a callback cannot retain its invocation frame.
-                val frame = if (callback is JsFunction && !callback.code.hasClosures && !callback.code.usesArguments) r.functionEnv(callback, selfArg, emptyList()) else null
-                for (i in 0 until length) { r.tick(); if (i < v.size && v[i] !== Hole) r.invoke(callback, selfArg, listOf(v[i], i.toDouble(), target), reuse = frame) }
+                var frame: Env? = null
+                for (i in 0 until length) {
+                    r.tick()
+                    if (i < v.size && v[i] !== Hole) {
+                        if (frame == null && callback is JsFunction && !callback.code.hasClosures && !callback.code.usesArguments) {
+                            frame = r.functionEnv(callback, selfArg, emptyList())
+                        }
+                        r.invoke(callback, selfArg, listOf(v[i], i.toDouble(), target), reuse = frame)
+                    }
+                }
                 Undefined
             }
             "indexOf" -> Native { r, self, a ->

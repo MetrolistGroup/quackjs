@@ -639,6 +639,14 @@ class PlayerProgramTest {
         assertEquals("abc", compile("try{return 'wrong'}finally{return x}").decipherSignature("abc"))
     }
 
+    @Test fun emptyAndSparseForEachDoNotAllocateCallbackFrames() {
+        val locals = (0 until 10_000).joinToString(",") { "v$it" }
+        for (array in listOf("[]", "Array(8)")) {
+            val program = compile("var callback=function(){var $locals;throw 'must not run'};for(var i=0;i<200;i++)$array.forEach(callback);return x;")
+            assertEquals("abc", program.decipherSignature("abc"))
+        }
+    }
+
     @Test fun dateAndNumericDispatchSemantics() {
         val p = compile("return String.fromCharCode(65,65536+66)+':'+(new Date('1970-01-01T09:45:22.000+09:45')/1000);")
         assertEquals("AB:22", p.decipherSignature("abc"))
