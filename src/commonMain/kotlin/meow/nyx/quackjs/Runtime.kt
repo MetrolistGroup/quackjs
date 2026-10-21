@@ -219,8 +219,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 }
                 is JsFunction -> {
                     val env = functionEnv(fn, self, args, reuse)
-                    // The recognized callback has at most ten nested complex expressions; otherwise retain depth checks.
-                    if (expressionDepth <= 246 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
+                    // Reserve eleven complex-expression levels for the XOR-key shape; otherwise retain depth checks.
+                    if (expressionDepth <= 245 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
                     val key = if (args.size >= 2 && args[0] is Double && args[1] is Double) DispatchKey(fn.code, args[0] as Double, args[1] as Double) else null
                     val body = if (key == null) fn.code.body else dispatch[key] ?: specializedBodies?.get(key) ?: if (specializedBodies != null && specializedBodies.size < 256) specialize(fn.code, key.first, key.second, this).also { specializedBodies[key] = it } else fn.code.body
                     when (val flow = exec(body, env)) {

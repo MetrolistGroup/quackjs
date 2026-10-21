@@ -120,6 +120,33 @@ class HotCharacterPlanLane27Test {
         }
     }
 
+    @Test fun nearLimitKeyShapesMatchInterpreterDepthChecks() {
+        val bodies = listOf(body, body.replace(".indexOf", "[keys[1]]"), body.replace(".indexOf", "[keys[mask^6]]"))
+        for (callbackBody in bodies) {
+            assertNotNull(code(callbackBody).hotCharacterPlan)
+            // Callback entry depths 244..249 straddle the plan boundary and interpreter limit.
+            for (padding in 7..12) {
+                fun evaluate(fast: Boolean): Result<Any?> = runCatching {
+                    val expr = """(function(){
+                        var e=['a','b','c'],r=3,keys=['push','indexOf','length'],mask=7;
+                        var callback=function(v,i,a){${if (fast) callbackBody else ";$callbackBody"}};
+                        var recurse=function(n){if(n)return ${"! ".repeat(8)}recurse(n-1);callback.call(['b'],'a',0,['a']);return 0};
+                        return ${"! ".repeat(padding)}recurse(26)
+                    })()"""
+                    Runtime(source).expression(Parser(Lexer(expr).tokens()).completeExpression())
+                }
+                val expected = evaluate(false)
+                val actual = evaluate(true)
+                if (expected.isSuccess) assertEquals(expected.getOrThrow(), actual.getOrThrow())
+                else {
+                    assertTrue(actual.exceptionOrNull() is UnsupportedPlayerException)
+                    assertEquals("Expression execution depth limit exceeded", expected.exceptionOrNull()?.message)
+                    assertEquals(expected.exceptionOrNull()?.message, actual.exceptionOrNull()?.message)
+                }
+            }
+        }
+    }
+
     @Test fun realDispatcherMatchesInterpreterAcrossRandomUtf16Challenges() {
         val fallbackSource = realPlayerSlice.replace("function(f,t,\nP){", "function(f,t,\nP){;")
         assertTrue(fallbackSource != realPlayerSlice)
