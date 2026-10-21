@@ -29,7 +29,7 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
             }
             if (providers.gradleProperty("oracleOnly").isPresent) {
-                kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt")
+                kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt", "**/Lane32Acceptance*.kt")
             }
         }
     }
@@ -51,5 +51,19 @@ tasks.register<JavaExec>("playerBenchmark") {
     jvmArgs("-Xms512m", "-Xmx2g")
     doFirst {
         check(!providers.gradleProperty("oracleOnly").isPresent) { "playerBenchmark requires the core, not -PoracleOnly" }
+    }
+}
+
+tasks.register<JavaExec>("lane32AcceptanceBenchmark") {
+    group = "verification"
+    description = "Opt-in per-kind/length warm timings and JVM allocation report with fresh QuickJS parity"
+    dependsOn("jvmTestClasses")
+    val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
+    mainClass.set("meow.nyx.quackjs.verification.Lane32AcceptanceBenchmarkKt")
+    systemProperty("quackjs.fixtures", layout.projectDirectory.dir("fixtures").asFile.absolutePath)
+    jvmArgs("-Xms512m", "-Xmx2g")
+    doFirst {
+        check(!providers.gradleProperty("oracleOnly").isPresent) { "lane32AcceptanceBenchmark requires the core, not -PoracleOnly" }
     }
 }
