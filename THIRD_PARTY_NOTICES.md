@@ -25,12 +25,3 @@ QuackJS owns or relicenses the entire upstream player.
 
 The Gradle wrapper scripts and JAR come from Gradle, distributed under
 [Apache-2.0](licenses/Apache-2.0.txt). Script copyright/license headers are retained.
-
-## Consumer migration patches
-
-`integrations/innertubex.patch` and `integrations/metrolist-kmp.patch` contain
-migration changes and context from their respective GPL-3.0-licensed projects.
-They are modifications, not original upstream releases. Exact baseline commits,
-file hashes, changed behavior and verification are documented in
-[`docs/integration.md`](docs/integration.md). Embedded upstream notices remain
-applicable, including notices in deleted JavaScript shown as patch context.

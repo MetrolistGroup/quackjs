@@ -17,14 +17,10 @@ class PlayerProgram {
 class UnsupportedPlayerException(message: String) : IllegalArgumentException(message)
 ```
 
-Shared baseline Gradle targets JVM (Android compatible JVM bytecode) and native Linux/iOS. Runtime implementation belongs in commonMain. Verification fixtures and JVM oracle/benchmark are independent of implementation.
+## Architecture
 
-Local reference repositories, read only:
-- `/mnt/work/projects/faraday/src/zemer/player-config-deriver.ts`: landmark hints.
-- `/mnt/work/projects/faraday/registry/player_configs.json`: real configs.
-- `/mnt/work/projects/innertubex/src/commonMain/kotlin/com/metrolist/innertubex/cipher/`: consumer contracts, QuickJS solver and globals.
-- `/mnt/work/projects/faraday/src/zemer/cipher-runtime.ts`: JS oracle globals.
+The runtime lives in commonMain and targets Android, JVM, Linux and iOS. It indexes source and follows only the required transform dependencies rather than initializing the whole browser player. Numeric dispatchers are specialized; parsed code and safe constant templates are reused. Mutable containers and execution budgets remain private to each invocation, so compiled programs support concurrent callers without output caching.
 
-Real fixture `fixtures/eb27e5fd.js` downloaded from https://www.youtube.com/s/player/eb27e5fd/player_ias.vflset/en_GB/base.js. Hints: Su(11,3932,INPUT), cg, 20724. Player uses constant string table km, branched arithmetic dispatcher functions, helper object c5. nClass wraps URL parsing; slice down to actual n transform rather than emulate browser.
+`nClass` is a URL wrapper in the original player. QuackJS discovers the n-table update and executes that dependency slice, rather than emulating browser URL handling. Hint-free compilation requires unambiguous executable landmarks; unsupported or ambiguous source fails explicitly. Optimized plans retain live mutation guards and interpreter fallbacks, not fixture/player-ID assumptions.
 
-No push/PR. Conventional commits and branches. Never add UI tests. No secrets/credentials from sibling repos. Do not claim readiness or speed without real-player parity and measurements.
+Verification fixtures and full-player Node/QuickJS oracles are independent of the implementation. [Fixture provenance](fixtures/manifest.json), [verification methodology](docs/verification.md) and [measured benchmarks](docs/benchmark.md) define the evidence and its limits. [InnerTubeX migration](docs/integration.md) covers caller contracts; networking and URL encoding stay outside the core.

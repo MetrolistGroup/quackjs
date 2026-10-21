@@ -1,28 +1,62 @@
 # Measured performance
 
-## After the 32-lane experiment
+## Reproduce the JVM workloads
 
-Final core: `25e10da`, measured 2026-10-21. Ten production optimizations selected
-from [32 independent lanes](performance-lanes/summary.md), plus two verification
-harnesses. The original benchmark inputs and timing boundaries are unchanged.
+```sh
+./gradlew playerBenchmark --console=plain
+./gradlew lane32AcceptanceBenchmark --console=plain
+```
 
-Environment: Linux x86_64, AMD Ryzen 9 7950X3D (32 logical CPUs), Temurin
-21.0.12.1, JVM heap 512 MiB initial / 2 GiB maximum. QuickJS-KT JVM 1.0.15,
-192 MiB native heap, 2 MiB JS stack, dedicated 8 MiB thread. No CPU pinning or
-power-policy control; shared host. Heavy work from these lanes was serialized
-with `/tmp/quackjs-perf32.validation.lock`.
+Both tasks are opt-in, use JVM test-only dependencies and reject `-PoracleOnly`.
+They verify the four full-player golden suites against Kotlin and QuickJS before
+measurement, then compare every timed sample's complete output outside the timer.
+A mismatch aborts the run. Neither implementation caches challenge outputs.
+See [oracle methodology and corpus provenance](verification.md).
 
-`./gradlew playerBenchmark --console=plain`: cold medians use 11 samples after
-3 warmups; warm medians use 31 samples after 20 warmups, each with 496 mixed
-signature/n transforms. Both implementations check all four golden suites before
-measurement and every timed output afterward. QuickJS uses a precompiled batch
-bridge. Neither implementation caches challenge outputs. Full boundaries are in
-[verification](verification.md#opt-in-comparison-benchmark).
+### JVM methodology
 
-### Unchanged control and final core
+- **Cold program:** source already in memory; fresh hinted
+  `PlayerProgram.compile` plus first signature (length 86) and n (length 19).
+  QuickJS gets a fresh runtime/thread, globals, complete-player compilation and
+  the same first pair. First-call input setup is included; process startup,
+  native library loading, fixture I/O and disposal are excluded. Three discarded
+  warmups, **11 samples per implementation/player**. Hint-free compilation is
+  not timed.
+- **Warm batch:** one compiled Kotlin program versus one initialized full
+  QuickJS player; 31 cases repeated 16 times, **496 transforms/sample**. QuickJS's
+  input array and batch bridge are installed/compiled outside timing; samples
+  execute bytecode, not per-input eval strings. Twenty discarded warmups,
+  **31 samples per implementation/player**. This is a batched steady-state
+  baseline, not a charge for full-player initialization on every call.
+- Both warm paths include result-array construction and JSON serialization;
+  QuickJS also includes one dispatcher/JNI round trip and result marshalling per
+  batch. Input transfer and equality checks are excluded. Implementations
+  alternate first/second order on each paired sample. No forced GC or elapsed-time
+  assertions. Results are median milliseconds, not individual-call percentiles.
+- Tasks print JVM/vendor/flags/heap, OS/architecture, CPU count and QuickJS limits.
+  Run separate JVM processes on an otherwise idle host; record CPU model, power
+  policy and source commit. Serialize competing builds/benchmarks. These small
+  harnesses do not measure process startup, concurrent throughput, retained memory,
+  energy, live networking, Android hardware or Apple performance.
+
+## Recorded JVM results
+
+Core `25e10da`, measured 2026-10-21, after ten selected runtime optimizations.
+Production remained common Kotlin/stdlib only, with no public API change,
+fixture-specific constants, output caches or relaxed safety budgets. Historical
+experiment reports remain recoverable from Git history.
+
+Environment: Linux 7.2.11-1-cachyos x86_64, AMD Ryzen 9 7950X3D (32 logical CPUs),
+Temurin 21.0.12.1, JVM heap 512 MiB initial / 2 GiB maximum. QuickJS-KT JVM 1.0.15,
+192 MiB native heap, 2 MiB JS stack, dedicated 8 MiB thread. The observed governor
+was `powersave` with `amd-pstate-epp`; no CPU pinning or policy control. Heavy
+validation was serialized, but the shared host was not guaranteed idle. JIT, GC
+and scheduling remain sources of noise.
+
+### Unchanged control and optimized core
 
 Each column is a separate JVM process. The control before and after the two
-candidate runs uses the original `a7e66f5` runtime, including the same benchmark.
+candidate runs uses the original `a7e66f5` runtime and the same benchmark.
 All times are milliseconds. **Lower is better.**
 
 | Player | Control cold before / after | Final cold run 1 / 2 | Control warm before / after | Final warm run 1 / 2 |
@@ -33,11 +67,10 @@ All times are milliseconds. **Lower is better.**
 | 5008be0a | 119.919 / 122.344 | 108.462 / 112.073 | 36.408 / 36.248 | 30.269 / 31.140 |
 
 Warm latency falls approximately **13–21% relative to the previous core** across
-these measurements. Cold latency also improves, but its smaller differences are
-more sensitive to host noise. These ranges are observations, not confidence
-intervals or universal guarantees.
+these measurements. Cold differences are smaller and more sensitive to noise.
+These ranges are observations, not confidence intervals or universal guarantees.
 
-### Final core versus QuickJS
+### Optimized core versus QuickJS
 
 Times below are **QuackJS / QuickJS**, measured in the same alternating sample
 sequence in each run.
@@ -51,27 +84,26 @@ sequence in each run.
 
 Cold preparation is **2.3–2.5× faster**. Warm mixed-batch latency is **20–27% lower**
 (approximately **1.25–1.37× throughput**) on all four players in both runs. This
-is a consistent improvement on this corpus, not proof of a universal advantage.
-Network, process startup and native library loading are outside these timings.
-Cold measurements supply Faraday hints; hint-free compilation is not timed.
-
-Raw logs in `/tmp/quackjs-perf32/`:
-`parent-baseline-benchmark.log`, `combined-benchmark-1.log`,
-`combined-benchmark-2.log`, `parent-baseline-after.log`.
+is limited to this four-player dispatcher/table corpus, not proof of a universal
+advantage or a guarantee for every individual signature/n length or platform.
 
 ### JVM allocation and unseen-input acceptance
 
-`./gradlew lane32AcceptanceBenchmark --console=plain` generates 112 deterministic
-unseen valid challenges across the four original players, checks their results
-against full-player QuickJS, checks repeated/concurrent calls, and measures
-signature and n separately at lengths 16, 19, 32, 64, 86, 128 and 256.
-Malformed n comparisons are diagnostics, not parity assertions, because that
-oracle goes through a URL wrapper. Existing goldens are also checked.
+`lane32AcceptanceBenchmark` generates 112 unseen valid challenges: two base64url
+inputs per player/kind/length at lengths 16, 19, 32, 64, 86, 128 and 256, using
+`java.util.Random(0x32acc3e7L)`. Inputs are distinct from stored goldens. Expected
+outputs come only from full-player QuickJS. The preflight checks repeated/reverse
+order and four-worker shared-program correctness, not concurrent throughput.
+Malformed n comparisons remain diagnostics because that oracle uses a URL wrapper.
 
-For each player/kind/length: 10 warmups, 15 samples, 16 transforms/sample, with
-result construction/JSON serialization included. `ThreadMXBean` measures calling
-JVM-thread allocation, not retained/peak heap or QuickJS's native/worker memory.
-Bytes/op below are equal-weight means of the seven length-group medians:
+Each player/kind/length cell has 10 paired warmups, 15 paired samples and 16
+transforms/sample. Both paths include result construction/JSON serialization;
+compilation, input transfer and equality checks are excluded. Timing reports
+median batch time divided by 16, not individual-call latency percentiles.
+Optional `ThreadMXBean` accounting measures calling JVM-thread allocation, not
+retained/peak heap or QuickJS native/worker memory; unsupported counters are
+reported as unsupported, not zero. Bytes/op below are equal-weight means of the
+seven length-group medians:
 
 | Player | Signature bytes/op before → after | n bytes/op before → after |
 | --- | ---: | ---: |
@@ -80,22 +112,45 @@ Bytes/op below are equal-weight means of the seven length-group medians:
 | eb27e5fd | 12,746.2 → 5,618.2 | 382,647.2 → 209,386.6 |
 | 5008be0a | 12,631.9 → 5,623.8 | 404,948.9 → 246,271.1 |
 
-Across those fixed equal-operation groups, **signature allocation falls 56% and
+Across these fixed equal-operation groups, **signature allocation falls 56% and
 n allocation 41%**. Per-group changes vary. This is one allocation measurement
-pair, not a GC-pause/energy result. Logs: `parent-baseline-acceptance.log` and
-`combined-acceptance.log`; full per-length output remains there.
+pair, not a GC-pause/energy or total-memory result. Structural reductions remove
+assignment closures/return wrappers, small-call temporary lists, repeated callback
+argument arrays and double copies of split/template containers. A guarded n
+callback plan avoids repeated AST traversal without caching inputs/results or
+assuming immutable tables.
 
-The largest structural reductions remove assignment closures/return wrappers,
-small-call temporary lists, repeated callback argument arrays, and double copies
-of split/template containers. The guarded n callback plan avoids repeated AST
-traversal without caching its inputs/results or assuming immutable tables.
+## Kotlin/Native extract workload
 
-### Kotlin/Native extract workload
+This opt-in harness uses the 15,171-UTF-16-unit `eb27e5fd` **dependency extract**,
+not full players. Reproduce on Linux x64 after Gradle downloads Kotlin/Native
+2.4.20 (for example via `./gradlew linuxX64Test`):
 
-The opt-in [Native harness](performance-lanes/31-native-performance-verification.md)
-uses the 15,171-unit eb27e5fd **dependency extract**, not full players. `konanc -opt`,
-unchanged GC defaults; 3 warmups, 11 samples; output checks outside timing.
-A baseline binary run was placed between two final-core runs:
+```sh
+set -eu
+native="$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.20"
+out=$(mktemp -d)
+"$native/bin/konanc" -opt \
+  -entry meow.nyx.quackjs.nativePerformanceLane31 \
+  -o "$out/native-workload" \
+  src/commonMain/kotlin/meow/nyx/quackjs/*.kt \
+  src/commonTest/kotlin/meow/nyx/quackjs/RealPlayerSlice.kt \
+  src/commonTest/kotlin/meow/nyx/quackjs/NativePerformanceLane31.kt
+for run in 1 2; do "$out/native-workload.kexe"; done
+rm -r "$out"
+```
+
+The compiler uses `-opt` and unchanged GC defaults. Six independently checked
+extract vectors include Unicode, one-character and empty inputs. Source loading,
+hints/vector setup and a full-vector preflight are outside timing. Both phases
+discard 3 warmups and retain 11 samples; every sample's complete outputs are
+checked outside the timer, with no forced GC or timing thresholds.
+
+Cold measures compile + first signature/n pair and output list. Warm measures
+192 transforms against one compiled program, including interpreter state,
+container copying and result-list construction, but no JSON bridge/serialization.
+It measures elapsed time, not allocated bytes. The other three full players have
+no Native timings. A control binary was run between two optimized-core runs:
 
 | Version/run | Cold compile + first pair, ms | Warm 192 transforms, ms |
 | --- | ---: | ---: |
@@ -105,14 +160,14 @@ A baseline binary run was placed between two final-core runs:
 
 Cold results are noisy and the warm difference is small. **No reliable Native
 speedup or QuickJS-native comparison is claimed.** All output checks passed.
-Logs: `combined-native-{1,2}.log`, `parent-baseline-native.log`. Android hardware,
-Apple execution, memory retention, energy and live playback are unmeasured.
+Profiling attempts did not yield trustworthy attribution: `perf` lacked
+permissions and `gprofng` warned of an unreliable collection interval. No Native
+allocation, retained-memory, energy, Android-device or Apple claim follows.
 
 ## Historical initial implementation
 
-Before this optimization round, core `a7e66f5` was near warm parity rather than
-consistently faster than QuickJS. Original two runs, milliseconds as
-**QuackJS / QuickJS**:
+Before optimization, core `a7e66f5` was near warm parity rather than consistently
+faster than QuickJS. Original two runs, milliseconds as **QuackJS / QuickJS**:
 
 | Player | Run 1 cold | Run 2 cold | Run 1 warm batch | Run 2 warm batch |
 | --- | ---: | ---: | ---: | ---: |
@@ -121,6 +176,5 @@ consistently faster than QuickJS. Original two runs, milliseconds as
 | eb27e5fd | 128.784 / 286.599 | 121.964 / 262.502 | 43.695 / 52.807 | 40.812 / 46.308 |
 | 5008be0a | 131.262 / 282.611 | 120.715 / 261.300 | 43.529 / 41.087 | 37.239 / 38.626 |
 
-Original logs: `/tmp/quackjs-benchmark-final.log` and
-`/tmp/quackjs-benchmark-final-2.log`. These older runs are retained for context,
-not used as the paired control for the new speedup claims.
+The first run's `5008be0a` warm batch regressed relative to QuickJS. These older
+runs are retained for context, not used as the paired controls for newer claims.
