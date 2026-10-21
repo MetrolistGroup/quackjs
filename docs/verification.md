@@ -140,6 +140,20 @@ JitPack metadata and resolve each required platform variant in a fresh external
 consumer without Maven Local or source substitution; inspect production graphs
 and artifacts for unwanted JS/native payloads. See [migration guidance](integration.md).
 
+### Release 0.1.0
+
+On 2026-10-21, [JitPack](https://jitpack.io/#MetrolistGroup/quackjs/0.1.0)
+reported `ok` for tag `0.1.0` at `733732d`. All six hosted publications were
+downloaded and passed the checker above, including source attachments and
+native metadata hashes. POMs retain GPL-3.0-only licensing information.
+
+An isolated migrated InnerTubeX checkout resolved the hosted `0.1.0` dependency
+without Maven Local, project substitution or vendored QuackJS. Fresh runs passed
+382 desktop, 375 Android-host and 29 harness tests; API/style checks and assembly
+also passed. Production graphs selected the Android AAR and JVM JAR, with no
+QuickJS dependency. This validates the migrated backend, not a dependency change
+in the original InnerTubeX repository. Apple compilation is not execution/linking.
+
 ## Recorded scope and limits
 
 For core `25e10da`, the recorded combined run passed **111 JVM, 103 Android-host
