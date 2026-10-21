@@ -157,14 +157,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     self = eval(expr.fn.target, env)
                     val key = eval(expr.fn.key, env)
                     if (!expr.construct && key == "call" && (self is JsFunction || self is Native)) {
-                        val args = if (expr.args.isEmpty()) emptyList() else expr.args.map { eval(it, env) }
-                        return invoke(self, args.getOrElse(0) { Undefined }, args.drop(1))
+                        if (expr.args.isEmpty()) return invoke(self, Undefined, emptyList())
+                        val receiver = eval(expr.args[0], env)
+                        return invoke(self, receiver, arguments(expr.args, env, 1))
                     }
                     val method = property(self, key)
                     if (method === Undefined && key is String && (self is String || self is JsArray || self is Native) && identifierProperty(key) && key !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '$key'")
                     method
                 } else eval(expr.fn, env)
-                val args = if (expr.args.isEmpty()) emptyList() else expr.args.map { eval(it, env) }
+                val args = arguments(expr.args, env)
                 if (expr.construct) {
                     if (fn !is Native) unsupported("Only built-in transform constructors are supported")
                     invoke(fn, Undefined, args, construct = true)
@@ -182,6 +183,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
             is FunctionExpr -> { allocate(1); JsFunction(expr, env) }
         } } finally { expressionDepth-- }
+    }
+    private fun arguments(args: List<Expr>, env: Env, start: Int = 0): List<Any?> = when (args.size - start) {
+        0 -> emptyList()
+        1 -> listOf(eval(args[start], env))
+        2 -> listOf(eval(args[start], env), eval(args[start + 1], env))
+        3 -> listOf(eval(args[start], env), eval(args[start + 1], env), eval(args[start + 2], env))
+        else -> ArrayList<Any?>(args.size - start).also { values ->
+            for (i in start until args.size) values.add(eval(args[i], env))
+        }
     }
     fun function(code: FunctionExpr): JsFunction = JsFunction(code, global)
     fun expression(expr: Expr, values: Map<String, Any?> = emptyMap()): Any? = eval(expr, Env(global).also { it.values.putAll(values) })
