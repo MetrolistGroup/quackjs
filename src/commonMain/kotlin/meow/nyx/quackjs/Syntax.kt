@@ -119,7 +119,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
 
     companion object {
         private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
-        private val operators = listOf(">>>=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...")
+        private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...")
     }
 }
 
@@ -289,7 +289,8 @@ internal class Parser(private val tokens: List<Token>) {
         when {
             t == "{" -> block()
             accept(";") -> EmptyStmt
-            accept("var") || accept("let") || accept("const") -> vars().also { accept(";") }
+            accept("var") -> vars().also { accept(";") }
+            accept("let") || accept("const") -> unsupported("Block-scoped declarations are unsupported")
             accept("if") -> { val e = condition(); val yes = statement(); IfStmt(e, yes, if (accept("else")) statement() else null) }
             accept("return") -> ReturnStmt(if (t == ";" || t == "}") null else expression()).also { accept(";") }
             accept("throw") -> ThrowStmt(expression()).also { accept(";") }
@@ -297,7 +298,12 @@ internal class Parser(private val tokens: List<Token>) {
             accept("do") -> { val body = statement(); expect("while"); Loop(null, condition(), null, body, true).also { accept(";") } }
             accept("for") -> {
                 expect("(")
-                val init = if (t == ";") null else if (accept("var") || accept("let")) vars() else ExpressionStmt(expression())
+                val init = when {
+                    t == ";" -> null
+                    accept("let") || accept("const") -> unsupported("Block-scoped declarations are unsupported")
+                    accept("var") -> vars()
+                    else -> ExpressionStmt(expression())
+                }
                 expect(";"); val test = if (t == ";") null else expression(); expect(";")
                 val update = if (t == ")") null else expression(); expect(")"); Loop(init, test, update, statement())
             }

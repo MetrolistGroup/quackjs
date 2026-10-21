@@ -19,18 +19,33 @@ internal class SourceIndex(val source: String, className: String) {
         val recent = ArrayDeque<Token>()
         val found = mutableListOf<Assignment>()
         val methodCalls = mutableListOf<Triple<String, Int, Int>>()
+        val updates = mutableListOf<Pair<String, Int>>()
         val stamps = mutableSetOf<Int>()
         var pendingStamp: Int? = null
         var braces = 0
         var parens = 0
         var count = 0
         var previous: String? = null
+        var prefixUpdate = false
+        fun recordUpdate(name: String) {
+            if (updates.size >= 100_000) unsupported("Source mutation limit exceeded")
+            updates.add(name to braces)
+        }
         while (true) {
             val token = lexer.next(previous)
             if (token.kind == -1) break
             if (++count > 2_000_000) unsupported("Source token limit exceeded")
             if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
             pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
+            if (prefixUpdate) {
+                if (token.kind == 0 && identifier.matches(token.text)) { recordUpdate(token.text); prefixUpdate = false }
+                else if (token.kind != 0 || token.text != "(") prefixUpdate = false
+            }
+            if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
+                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" }, call = true)
+                if (lhs != null) recordUpdate(lhs.first().text)
+                prefixUpdate = token.text == "++" || token.text == "--"
+            }
             if (token.kind == 0 && token.text == "=") {
                 val lhs = assignmentTarget(recent.toList())
                 if (lhs != null) {
@@ -67,7 +82,7 @@ internal class SourceIndex(val source: String, className: String) {
         names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
         val writes = found.filter { it.braces == rootBraces }
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
-        mutatedObjects = methodCalls.filter { it.second == rootBraces }.map { it.first }.toSet() + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text }
+        mutatedObjects = methodCalls.filter { it.second == rootBraces }.map { it.first }.toSet() + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces }.map { it.first }
         timestamps = stamps
     }
 
@@ -125,6 +140,7 @@ internal class SourceIndex(val source: String, className: String) {
 
     companion object {
         val identifier = Regex("[A-Za-z_$][A-Za-z0-9_$]*")
+        private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
         private fun assignmentTarget(tokens: List<Token>, call: Boolean = false): List<Token>? {
             var start = tokens.lastIndex
             if (start < 0) return null

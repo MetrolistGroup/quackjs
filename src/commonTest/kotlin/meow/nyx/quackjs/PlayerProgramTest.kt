@@ -81,6 +81,65 @@ class PlayerProgramTest {
         assertFailsWith<UnsupportedPlayerException> { compile("return recur(x);", extra = "var recur=function(x){return recur(x)};") }
     }
 
+    @Test fun splitHonorsJavaScriptLimitsWithoutTruncatingOversizedTables() {
+        val entries = "v;".repeat(69_999) + "v"
+        for (limit in listOf("", ",undefined", ",70000")) {
+            val error = assertFailsWith<UnsupportedPlayerException> {
+                compile("return entries[69999]+x;", extra = "var entries='$entries'.split(';'$limit);")
+            }
+            assertTrue(error.message!!.contains("Array size limit"))
+        }
+        assertEquals("65536:v", compile("return entries.length+':'+entries[65535];", extra = "var entries='$entries'.split(';',65536);").decipherSignature("abc"))
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return entries[69999]+x;", extra = "var entries='${"v".repeat(70_000)}'.split('');")
+        }
+        assertEquals("a|b", compile("return x.split(',',2).join('|');").decipherSignature("a,b,c"))
+        assertEquals("a|b|", compile("return x.split(',').join('|');").decipherSignature("a,b,"))
+        assertEquals("", compile("return x.split(',',4294967296).join('|');").decipherSignature("a,b"))
+        val runtime = Runtime(SourceIndex(source(), "C"))
+        val value = "x".repeat(8_000_000)
+        val split = runtime.invoke(runtime.get(value, "split"), value, listOf("", 1.0)) as JsArray
+        assertEquals(listOf<Any?>("x"), split.values)
+    }
+
+    @Test fun joinRejectsOverflowingLengthsBeforeAllocatingOutput() {
+        val runtime = Runtime(SourceIndex(source(), "C"))
+        val literal = "x".repeat(8_000_000)
+        val values = runtime.array(List(270) { literal })
+        val error = assertFailsWith<UnsupportedPlayerException> {
+            runtime.invoke(runtime.get(values, "join"), values, listOf(""))
+        }
+        assertTrue(error.message!!.contains("String size limit"))
+    }
+
+    @Test fun externalUpdatesAndCompoundAssignmentsAreRejected() {
+        val updates = listOf("offset++", "++offset", "offset--", "--offset", "(offset)++", "++(offset)",
+            "offset+=1", "offset-=1", "offset*=2", "offset/=2", "offset%=2", "offset&=1", "offset|=2", "offset^=2",
+            "offset<<=1", "offset>>=1", "offset>>>=1", "offset**=2", "offset&&=2", "offset||=2", "offset??=2")
+        for (update in updates) {
+            val error = assertFailsWith<UnsupportedPlayerException>(update) {
+                compile("return offset+x;", extra = "var offset=1;$update;")
+            }
+            assertTrue(error.message!!.contains("Externally mutated dependency 'offset'"), update)
+        }
+        for (update in listOf("helper.n++", "++helper.n", "helper['n']+=2")) {
+            assertFailsWith<UnsupportedPlayerException>(update) {
+                compile("return helper.n+x;", extra = "var helper={n:1};$update;")
+            }
+        }
+        assertEquals("1abc", compile("return offset+x;", extra = "var offset=1;var unused=function(){offset++;offset+=2;};").decipherSignature("abc"))
+    }
+
+    @Test fun blockScopedDeclarationsAreRejectedInsteadOfHoisted() {
+        for (keyword in listOf("let", "const")) {
+            val error = assertFailsWith<UnsupportedPlayerException> { compile("var k='a';{$keyword k='b'}return k+x;") }
+            assertTrue(error.message!!.contains("Block-scoped declarations"))
+            assertFailsWith<UnsupportedPlayerException> { compile("var k='a';for($keyword k=0;k<1;){break;}return k+x;") }
+        }
+        assertEquals("babc", compile("var k='a';{var k='b'}return k+x;").decipherSignature("abc"))
+        assertEquals("cba", compile(extra = "var unused=function(){let k=1;const n=2;};").decipherSignature("abc"))
+    }
+
     @Test fun unsupportedOperationsNeverBecomeSuccessFallbacks() {
         assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/a/g,'b')}catch(e){return x}") }
         assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/a/g,'b')}finally{return x}") }

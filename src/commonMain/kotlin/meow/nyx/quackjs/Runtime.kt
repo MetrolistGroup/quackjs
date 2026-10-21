@@ -291,7 +291,7 @@ internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = empt
             "reverse" -> Native { _, _, _ -> tick(v.size); v.reverse(); arr }
             "join", "toString" -> Native { _, _, a ->
                 val sep = if (name == "toString" || a.isEmpty() || a[0] === Undefined) "," else text(a[0])
-                val size = v.sumOf { if (it == null || it === Undefined || it === Hole) 0 else text(it).length }.toLong() + (v.size - 1).coerceAtLeast(0).toLong() * sep.length
+                val size = v.sumOf { if (it == null || it === Undefined || it === Hole) 0L else text(it).length.toLong() } + (v.size - 1).coerceAtLeast(0).toLong() * sep.length
                 if (size > 65_536) unsupported("String size limit exceeded")
                 string(v.joinToString(sep) { if (it == null || it === Undefined || it === Hole) "" else text(it) })
             }
@@ -320,9 +320,30 @@ internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = empt
     private fun stringMethod(value: String, name: String): Any? = when (name) {
         "split" -> Native { _, _, a ->
             if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
-            val limit = if (a.size < 2 || a[1] === Undefined) 65_536 else uint(a[1]).coerceAtMost(65_536L).toInt()
+            val limit = if (a.size < 2 || a[1] === Undefined) 4_294_967_295L else uint(a[1])
             val sep = a.firstOrNull()
-            val parts = when { limit == 0 -> emptyList(); a.isEmpty() || sep === Undefined -> listOf(value); text(sep).isEmpty() -> value.map { it.toString() }.take(limit); else -> value.split(text(sep)).take(limit) }
+            val parts = mutableListOf<Any?>()
+            fun addPart(start: Int, end: Int) {
+                tick()
+                if (parts.size >= 65_536) unsupported("Array size limit exceeded")
+                if (start == 0 && end == value.length) parts.add(value)
+                else { allocate(end - start); parts.add(value.substring(start, end)) }
+            }
+            if (limit > 0) {
+                if (a.isEmpty() || sep === Undefined) addPart(0, value.length)
+                else {
+                    val separator = text(sep)
+                    var start = 0
+                    if (separator.isEmpty()) {
+                        while (start < value.length && parts.size.toLong() < limit) { addPart(start, start + 1); start++ }
+                    } else while (parts.size.toLong() < limit) {
+                        val end = value.indexOf(separator, start)
+                        if (end < 0) { addPart(start, value.length); break }
+                        addPart(start, end)
+                        start = end + separator.length
+                    }
+                }
+            }
             array(parts)
         }
         "slice", "substring", "substr" -> Native { _, _, a ->
