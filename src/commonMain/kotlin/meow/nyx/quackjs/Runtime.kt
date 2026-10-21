@@ -468,13 +468,20 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 val selfArg = a.getOrElse(1) { Undefined }
                 // Without closures or arguments, a callback cannot retain its invocation frame.
                 var frame: Env? = null
+                // Observable arguments are copied by functionEnv; nested traversals own their buffer.
+                var callbackArgs: MutableList<Any?>? = null
                 for (i in 0 until length) {
                     r.tick()
                     if (i < v.size && v[i] !== Hole) {
                         if (frame == null && callback is JsFunction && !callback.code.hasClosures && !callback.code.usesArguments) {
-                            frame = r.functionEnv(callback, selfArg, emptyList())
+                            // Keep the preparation budget, but let invoke initialize the bindings once.
+                            r.allocate(callback.code.slots.size)
+                            r.tick(callback.code.slots.size)
+                            frame = Env(callback.env, callback.code.slots)
                         }
-                        r.invoke(callback, selfArg, listOf(v[i], i.toDouble(), target), reuse = frame)
+                        if (callbackArgs == null) callbackArgs = mutableListOf(v[i], i.toDouble(), target)
+                        else { callbackArgs[0] = v[i]; callbackArgs[1] = i.toDouble() }
+                        r.invoke(callback, selfArg, callbackArgs, reuse = frame)
                     }
                 }
                 Undefined
