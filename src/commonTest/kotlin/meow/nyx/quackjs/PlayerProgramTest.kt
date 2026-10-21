@@ -162,6 +162,58 @@ class PlayerProgramTest {
         }
     }
 
+    @Test fun stableReadOnlyPredicatesDoNotEscapeTheirArguments() {
+        val letters = "var letters='a;b'.split(';');"
+        for (call in listOf(
+            "Array.isArray(letters)", "Array['isArray'](letters)",
+            "Array.isArray.call(null,letters)", "Array.isArray.apply(null,[letters])",
+            "Number.isNaN(letters)", "Number.isFinite(letters)",
+            "Ctor.isArray(letters)",
+        )) assertEquals("aabc", compile("return letters[0]+x;", extra = letters + "var Ctor=Array;var unused=$call;").decipherSignature("abc"), call)
+        val scoped = source("return letters[0]+x;", extra = letters + "var ignored=function(Array){};var unused=Array.isArray(letters);")
+        assertEquals("aabc", PlayerProgram.compile("(function(g){$scoped})({});", PlayerHints("sig(INPUT)", "C", 12345)).decipherSignature("abc"))
+        assertFailsWith<UnsupportedPlayerException> {
+            PlayerProgram.compile("(function(Array){$scoped})({isArray:function(a){a.reverse()}});", PlayerHints("sig(INPUT)", "C", 12345))
+        }
+        assertFailsWith<UnsupportedPlayerException> {
+            PlayerProgram.compile("var setup=function Array(){$scoped};setup.isArray=function(a){a.reverse()};setup();", PlayerHints("sig(INPUT)", "C", 12345))
+        }
+        for (mutation in listOf(
+            "var Array={isArray:function(a){a.reverse()}};",
+            "Array.isArray=function(a){a.reverse()};",
+            "var patch=function(){Array.isArray=function(a){a.reverse()}};patch();",
+            "var Ctor=Array;var patch=function(){Ctor.isArray=function(a){a.reverse()}};patch();",
+            "var Ctor=Array;Object.assign(Ctor,{isArray:function(a){a.reverse()}});",
+        )) assertFailsWith<UnsupportedPlayerException>(mutation) {
+            compile("return letters[0]+x;", extra = letters + mutation + "var unused=Array.isArray(letters);")
+        }
+    }
+
+    @Test fun mutatingAContainerDoesNotMutateItsContents() {
+        val letters = "var letters='a;b'.split(';');"
+        for (mutation in listOf(
+            "var wrapper=[letters];wrapper.reverse();",
+            "var wrapper=[letters],alias=wrapper;alias.reverse();",
+            "var wrapper=[letters];wrapper.tag=1;wrapper.reverse();",
+            "var wrapper=[letters],alias=wrapper;alias.tag=1;wrapper.reverse();",
+            "var wrapper=[letters];wrapper[0]=letters;wrapper.reverse();",
+            "var wrapper=[letters];wrapper[0]=[];",
+            "var wrapper={value:letters};wrapper.value=[];",
+            "var wrapper=[letters],item=wrapper[0];wrapper.reverse();",
+        )) assertEquals("aabc", compile("return letters[0]+x;", extra = letters + mutation).decipherSignature("abc"), mutation)
+        for (mutation in listOf(
+            "var wrapper=[letters];mutate(wrapper);var mutate=function(o){o[0].reverse()};",
+            "var wrapper=[letters];wrapper[0].reverse();",
+            "var wrapper=[letters];wrapper[0][0]='changed';",
+            "var wrapper=[letters],item=wrapper[0];item[0]='changed';",
+            "var wrapper=[letters],alias=wrapper.reverse();alias[0].reverse();",
+            "var wrapper=[letters];wrapper.reverse=function(){this[0].reverse()};wrapper.reverse();",
+            "var wrapper=[letters],alias=wrapper;alias.reverse=function(){this[0].reverse()};wrapper.reverse();",
+            "var wrapper=[letters];wrapper.length={valueOf:function(){letters.reverse();return 0}};",
+            "var wrapper=[letters];Array.prototype.reverse=function(){this[0].reverse()};wrapper.reverse();",
+        )) assertFailsWith<UnsupportedPlayerException>(mutation) { compile("return letters[0]+x;", extra = letters + mutation) }
+    }
+
     @Test fun externalCallsCannotSilentlyMutateDependencies() {
         val signature = "return helper.f(x);"
         val helper = "var helper={f:function(x){return x;}};"

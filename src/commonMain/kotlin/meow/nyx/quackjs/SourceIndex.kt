@@ -16,6 +16,11 @@ internal class SourceIndex(val source: String, className: String) {
         }
     }
     private data class Assignment(val lhs: List<Token>, val offset: Int, val braces: Int, val parens: Int)
+    private data class CallSite(val target: List<Token>?, val offset: Int, val braces: Int, val statement: Boolean)
+    private data class References(val names: Set<String>, val end: Int)
+    private data class Reference(val name: String, val projected: Boolean)
+    private data class CallEffects(val receiver: String?, val predicate: String?, val reversal: String?, val arguments: Set<String>)
+    private data class FunctionScope(val depth: Int, val parameters: Int, val name: String?)
     private val assignments: List<Assignment>
     private val rootBraces: Int
     private val rootParens: Int
@@ -32,9 +37,8 @@ internal class SourceIndex(val source: String, className: String) {
         val scans = ScanBudget()
         val recent = ArrayDeque<Token>()
         val found = mutableListOf<Assignment>()
-        val methodCalls = mutableListOf<Triple<String, Int, Int>>()
-        val callArguments = mutableListOf<Pair<Int, Int>>()
-        val updates = mutableListOf<Triple<String, Int, Boolean>>()
+        val calls = mutableListOf<CallSite>()
+        val updates = mutableListOf<Pair<String, Int>>()
         val stamps = mutableSetOf<Int>()
         var pendingStamp: Int? = null
         var braces = 0
@@ -42,20 +46,32 @@ internal class SourceIndex(val source: String, className: String) {
         var count = 0
         var previous: String? = null
         var prefixUpdate = false
-        fun recordUpdate(name: String, member: Boolean) {
+        val headers = mutableMapOf<Int, Pair<Int, String?>>()
+        var bodyParameters: Pair<Int, String?>? = null
+        val activeScopes = ArrayDeque<FunctionScope>()
+        var classDepth = Int.MAX_VALUE
+        var classParameters = emptyList<Int>()
+        var classBindings = emptyList<String>()
+        var classFunctionScope = false
+        fun recordUpdate(name: String) {
             if (updates.size >= 100_000) unsupported("Source mutation limit exceeded")
-            updates.add(Triple(name, braces, member))
+            updates.add(name to braces)
         }
         while (true) {
             val token = lexer.next(previous)
             if (token.kind == -1) break
             if (++count > 2_000_000) unsupported("Source token limit exceeded")
+            bodyParameters?.let { parameters ->
+                if (token.kind == 0 && token.text == "{") {
+                    activeScopes.addLast(FunctionScope(braces + 1, parameters.first, parameters.second))
+                }
+            }
+            bodyParameters = null
             if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
             pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
             if (prefixUpdate) {
                 if (token.kind == 0 && identifier(token.text)) {
-                    val next = scans.next(Lexer(source, token.offset + token.text.length), token.context)
-                    recordUpdate(token.text, next.kind == 0 && next.text in listOf(".", "["))
+                    recordUpdate(token.text)
                     prefixUpdate = false
                 }
                 else if (token.kind != 0 || token.text != "(") prefixUpdate = false
@@ -63,7 +79,7 @@ internal class SourceIndex(val source: String, className: String) {
             if (token.kind == 0 && token.text == "delete") prefixUpdate = true
             if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
                 val lhs = assignmentTarget(recent, call = true, grouped = true)
-                if (lhs != null) recordUpdate(lhs.first().text, lhs.size > 1)
+                if (lhs != null) recordUpdate(lhs.first().text)
                 prefixUpdate = token.text == "++" || token.text == "--"
             }
             if (token.kind == 0 && token.text == "=") {
@@ -71,21 +87,34 @@ internal class SourceIndex(val source: String, className: String) {
                 if (lhs != null) {
                     if (found.size >= 100_000) unsupported("Source definition limit exceeded")
                     found.add(Assignment(lhs, token.offset + 1, braces, parens))
+                    if (lhs.size == 3 && lhs[0].text == "g" && lhs[1].text == "." && lhs[2].text == className && braces < classDepth) {
+                        classDepth = braces
+                        classParameters = activeScopes.map { it.parameters }
+                        classBindings = activeScopes.mapNotNull { it.name }
+                        classFunctionScope = activeScopes.lastOrNull()?.depth == braces
+                    }
                 }
             }
             if (token.kind == 0 && token.text == "(") {
                 val target = assignmentTarget(recent, call = true)
+                val namedFunction = recent.getOrNull(recent.lastIndex - 1)
+                if (target?.singleOrNull()?.text == "function") headers[parens] = token.offset + 1 to null
+                else if (namedFunction?.kind == 0 && namedFunction.text == "function") headers[parens] = token.offset + 1 to recent.last().text
                 if (target != null && target.first().text !in nonCalls || target == null && recent.lastOrNull()?.text in listOf(")", "?.")) {
-                    if (callArguments.size >= 100_000) unsupported("Source call limit exceeded")
-                    callArguments.add(token.offset + 1 to braces)
-                    if (target != null && target.size > 1) methodCalls.add(Triple(target.first().text, braces, parens))
+                    if (calls.size >= 100_000) unsupported("Source call limit exceeded")
+                    val before = target?.let { recent.getOrNull(recent.size - it.size - 1) }
+                    val statement = target != null && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
+                    calls.add(CallSite(target, token.offset + 1, braces, statement))
                 }
             }
             if (token.kind == 0) when (token.text) {
                 "{" -> braces++
-                "}" -> braces--
+                "}" -> {
+                    if (activeScopes.lastOrNull()?.depth == braces) activeScopes.removeLast()
+                    braces--
+                }
                 "(" -> parens++
-                ")" -> parens--
+                ")" -> { parens--; bodyParameters = headers.remove(parens) }
             }
             if (braces < 0 || parens < 0 || braces > 512 || parens > 512) unsupported("Source nesting limit exceeded")
             if (recent.size == 96) recent.removeFirst()
@@ -105,28 +134,114 @@ internal class SourceIndex(val source: String, className: String) {
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
         val primitives = mutableMapOf<String, Boolean>()
         fun canMutate(name: String): Boolean = !primitiveDefinition(name, primitives, scans)
-        val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).filter(::canMutate).toMutableSet()
-        // Calls can mutate reference values, but cannot mutate a primitive or its copied aliases.
-        for ((offset, depth) in callArguments) if (depth == rootBraces) argumentReferences(offset, scans).filterTo(sharedMutations, ::canMutate)
         val aliases = mutableMapOf<String, MutableSet<String>>()
+        val contents = mutableMapOf<String, MutableSet<String>>()
+        val origins = mutableMapOf<String, MutableSet<String>>()
+        val arrays = mutableSetOf<String>()
         for (write in writes) {
-            if (write.lhs.size != 1) continue
+            val owner = write.lhs.first().text
             val direct = referenceBase(write.offset, scans)
             val first = if (direct == null) scans.next(Lexer(source, write.offset)) else null
-            val targets = if (direct != null) setOf(direct) else if (first?.kind == 0 && first.text in listOf("[", "{")) argumentReferences(first.offset + 1, scans, if (first.text == "[") "]" else "}", first.text) else emptySet()
-            val alias = write.lhs.single().text
-            for (target in targets) {
-                aliases.getOrPut(alias) { mutableSetOf() }.add(target)
-                aliases.getOrPut(target) { mutableSetOf() }.add(alias)
+            if (direct != null) {
+                if (write.lhs.size > 1) contents.getOrPut(owner) { mutableSetOf() }.add(direct.name)
+                else if (direct.projected) origins.getOrPut(owner) { mutableSetOf() }.add(direct.name)
+                else {
+                    aliases.getOrPut(owner) { mutableSetOf() }.add(direct.name)
+                    aliases.getOrPut(direct.name) { mutableSetOf() }.add(owner)
+                }
+            } else if (first?.kind == 0 && first.text in listOf("[", "{")) {
+                val refs = argumentReferences(first.offset + 1, scans, if (first.text == "[") "]" else "}", first.text)
+                contents.getOrPut(owner) { mutableSetOf() }.addAll(refs.names)
+                val after = scans.next(Lexer(source, refs.end), first.text)
+                if (write.lhs.size == 1 && first.text == "[" && after.kind == 0 && after.text in setOf(";", ",", ")", "}")) arrays.add(owner)
             }
         }
-        val queue = ArrayDeque(sharedMutations)
-        while (queue.isNotEmpty()) {
-            for (alias in aliases[queue.removeFirst()].orEmpty()) if (canMutate(alias) && sharedMutations.add(alias)) queue.addLast(alias)
+        val arrayQueue = ArrayDeque(arrays)
+        while (arrayQueue.isNotEmpty()) for (alias in aliases[arrayQueue.removeFirst()].orEmpty()) if (arrays.add(alias)) arrayQueue.addLast(alias)
+        val parameters = classParameters.flatMap { argumentReferences(it, scans).names }.toSet()
+        val unknownScope = rootBraces > 0 && !classFunctionScope
+        val shadowed = names.keys + parameters + classBindings + if (unknownScope) readOnlyPredicates.keys else emptySet()
+        val builtins = mutableMapOf<String, String>()
+        for (root in readOnlyPredicates.keys) if (root !in shadowed) {
+            val queue = ArrayDeque(listOf(root))
+            while (queue.isNotEmpty()) {
+                val name = queue.removeFirst()
+                if (name !in builtins) { builtins[name] = root; queue.addAll(aliases[name].orEmpty()) }
+            }
         }
-        mutatedObjects = sharedMutations + updates.filter { it.second == rootBraces }.map { it.first }
+        val effects = calls.filter { it.braces == rootBraces }.map { call ->
+            val refs = argumentReferences(call.offset, scans)
+            val target = call.target?.let(::targetExpression)
+            var predicate = target
+            if (predicate is Member && predicate.key in setOf(Lit("call"), Lit("apply"))) predicate = predicate.target
+            val member = predicate as? Member
+            val builtin = (member?.target as? Id)?.name?.let(builtins::get)
+            val key = (member?.key as? Lit)?.value as? String
+            val pure = builtin?.takeIf { key != null && key in readOnlyPredicates.getValue(it) }
+            val reverse = if (target is Member && target.target is Id && target.key == Lit("reverse") && call.statement) {
+                val after = scans.next(Lexer(source, refs.end), ")")
+                target.target.name.takeIf { after.kind == 0 && after.text in setOf(";", "}") }
+            } else null
+            CallEffects(call.target?.takeIf { it.size > 1 }?.first()?.text, pure, reverse, refs.names)
+        }
+        val memberWrites = writes.filter { it.lhs.size > 1 }.map { it to targetExpression(it.lhs) }
+        val updated = updates.filter { it.second == rootBraces }.map { it.first }
+        val reassigned = writeCounts.filterValues { it > 1 }.keys
+        val explicit = memberWrites.map { it.first.lhs.first().text }.toSet() + updated + reassigned
+        fun ownSlot(expr: Expr?): Boolean = expr is Member && expr.target is Id && expr.key is Lit && expr.key.value.let {
+            it == null || it is String || it is Double || it is Boolean
+        } && expr.key.value != "length"
+        val deepWrites = memberWrites.filter { !ownSlot(it.second) }.map { it.first.lhs.first().text }
+        val changedLookups = (updated + reassigned + memberWrites.filter {
+            !ownSlot(it.second) || ((it.second as? Member)?.key as? Lit)?.value in setOf("reverse", "__proto__")
+        }.map { it.first.lhs.first().text }).toMutableSet()
+        val changedQueue = ArrayDeque(changedLookups)
+        while (changedQueue.isNotEmpty()) for (alias in aliases[changedQueue.removeFirst()].orEmpty()) if (changedLookups.add(alias)) changedQueue.addLast(alias)
+        fun mutations(blocked: Set<String>): Set<String> {
+            val own = mutableSetOf<String>()
+            val escaped = mutableSetOf<String>()
+            val queue = ArrayDeque<Pair<String, Boolean>>()
+            fun add(name: String, escape: Boolean = false) { if (canMutate(name)) queue.addLast(name to escape) }
+            explicit.forEach { add(it) }
+            (deepWrites + updated).forEach { add(it, true) }
+            for (effect in effects) {
+                if (effect.predicate != null && effect.predicate !in blocked) continue
+                // A discarded native reverse only changes the outer array's own slots.
+                val reversal = effect.reversal
+                if (reversal != null && reversal in arrays && reversal !in changedLookups && "Array" !in blocked && "Array" !in shadowed) {
+                    add(reversal)
+                } else {
+                    effect.receiver?.let { add(it, true) }
+                    effect.arguments.forEach { add(it, true) }
+                }
+            }
+            while (queue.isNotEmpty()) {
+                val (name, escape) = queue.removeFirst()
+                if (own.add(name)) {
+                    aliases[name].orEmpty().forEach { add(it) }
+                    origins[name].orEmpty().forEach { add(it, true) }
+                }
+                if (escape && escaped.add(name)) {
+                    (aliases[name].orEmpty() + contents[name].orEmpty()).forEach { add(it, true) }
+                }
+            }
+            return own
+        }
+        val builtinWrites = found.filter { it.lhs.size > 1 || it.braces != rootBraces || (writeCounts[it.lhs.first().text] ?: 0) > 1 }
+        val blocked = (builtinWrites.mapNotNull { builtins[it.lhs.first().text] } + updates.mapNotNull { builtins[it.first] }).toMutableSet()
+        var affected = mutations(blocked)
+        while (true) {
+            val changed = readOnlyPredicates.keys.filter { it in affected && it !in blocked }
+            if (changed.isEmpty()) break
+            blocked.addAll(changed)
+            affected = mutations(blocked)
+        }
+        mutatedObjects = affected + updated
         timestamps = stamps
     }
+
+    private fun targetExpression(tokens: List<Token>): Expr? =
+        try { Parser(tokens + Token("<eof>", -1)).completeExpression() } catch (_: UnsupportedPlayerException) { null }
 
     /** Prove immutable initializer results without executing unrelated player code. */
     private fun primitiveDefinition(name: String, known: MutableMap<String, Boolean>, scans: ScanBudget, resolving: MutableSet<String> = mutableSetOf()): Boolean {
@@ -164,7 +279,7 @@ internal class SourceIndex(val source: String, className: String) {
         } finally { resolving.remove(name) }
     }
 
-    private fun argumentReferences(offset: Int, scans: ScanBudget, closing: String = ")", opening: String = "("): Set<String> {
+    private fun argumentReferences(offset: Int, scans: ScanBudget, closing: String = ")", opening: String = "("): References {
         val lexer = Lexer(source, offset)
         val references = mutableSetOf<String>()
         var previous: String? = opening
@@ -190,7 +305,7 @@ internal class SourceIndex(val source: String, className: String) {
                     if (!functionBody && parametersClosed && token.text == "{" && depth == functionDepth) functionBody = true
                     else if (functionBody && token.text == "}" && depth == functionDepth + 1) { functionDepth = null; functionBody = false; parametersClosed = false }
                 }
-                if (depth == 0 && token.text == closing) return references
+                if (depth == 0 && token.text == closing) return References(references, lexer.position)
                 when (token.text) {
                     "(", "[", "{" -> depth++
                     ")", "]", "}" -> depth--
@@ -201,7 +316,7 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     /** Link direct reference paths without evaluating unrelated initializers. */
-    private fun referenceBase(offset: Int, scans: ScanBudget): String? {
+    private fun referenceBase(offset: Int, scans: ScanBudget): Reference? {
         val lexer = Lexer(source, offset)
         var previous: String? = null
         var count = 0
@@ -214,27 +329,29 @@ internal class SourceIndex(val source: String, className: String) {
         while (token.kind == 0 && token.text == "(") { groups++; token = next() ?: return null }
         if (token.kind != 0 || !identifier(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
         val base = token.text
-        token = next() ?: return base
+        var projected = false
+        token = next() ?: return Reference(base, projected)
         while (token.kind == 0 && token.text in listOf(".", "[")) {
+            projected = true
             if (token.text == ".") {
-                token = next() ?: return base
+                token = next() ?: return Reference(base, projected)
                 if (token.kind != 0 || !identifier(token.text)) return null
             } else {
                 var depth = 1
                 while (depth > 0) {
-                    token = next() ?: return base
+                    token = next() ?: return Reference(base, projected)
                     if (token.kind == -1) return null
                     if (token.kind == 0 && token.text == "[") depth++
                     if (token.kind == 0 && token.text == "]") depth--
                 }
             }
-            token = next() ?: return base
+            token = next() ?: return Reference(base, projected)
         }
         while (groups > 0) {
             if (token.kind != 0 || token.text != ")") return null
-            groups--; token = next() ?: return base
+            groups--; token = next() ?: return Reference(base, projected)
         }
-        return base.takeIf { token.kind == -1 || token.kind == 0 && token.text in listOf(";", ",", ")", "}") }
+        return Reference(base, projected).takeIf { token.kind == -1 || token.kind == 0 && token.text in listOf(";", ",", ")", "}") }
     }
 
     fun hasDefinition(name: String): Boolean = names.containsKey(name)
@@ -291,6 +408,7 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     companion object {
+        private val readOnlyPredicates = mapOf("Array" to setOf("isArray"), "Number" to setOf("isNaN", "isFinite"))
         fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }
         private val nonCalls = setOf("function", "if", "while", "for", "switch", "catch", "with", "typeof", "void", "delete", "return", "throw", "new")
         private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
