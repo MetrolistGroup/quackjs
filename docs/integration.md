@@ -52,7 +52,7 @@ git -C "$WORK/Metrolist-KMP" apply --check --index "$Q/integrations/metrolist-km
 git -C "$WORK/Metrolist-KMP" apply --index "$Q/integrations/metrolist-kmp.patch"
 ```
 
-For a fresh capture of an original, use `python3 "$Q/integrations/snapshot-consumer.py" /path/to/original "$WORK/copy" --manifest "$WORK/observed.json"`, then verify the copy against the delivered manifest **before applying**. A mismatch requires reconciling a new baseline in a copy, not forcing this patch or changing the original. The helper copies current tracked bytes, including staged additions and unstaged edits, recursively reads initialized submodules, refuses tracked symlinks and writes nothing to the source.
+For a fresh capture of an original, use `python3 "$Q/integrations/snapshot-consumer.py" /path/to/original "$WORK/copy" --manifest "$WORK/observed.json"`, then verify the copy against the delivered manifest **before applying**. A mismatch requires reconciling a new baseline in a copy, not forcing this patch or changing the original. The helper copies current tracked bytes, including staged additions and unstaged edits, recursively reads initialized submodules, refuses tracked symlinks and writes nothing to the source. Verification compares the complete nonexcluded file set as well as every hash: an added tracked source file is a mismatch, not an accepted newer baseline.
 
 Both patches were applied to fresh baseline copies with `git apply --check --index` and `git apply --index`; their staged trees exactly matched the tested migrations. [`application-results.json`](../integrations/application-results.json) records patch digests and resulting tree IDs. Avoid `git archive` for the Metrolist submodule snapshot: libopus export attributes omit files and convert line endings. Use the verified filesystem baseline instead.
 
@@ -70,9 +70,9 @@ python3 integrations/verify-quackjs-publication.py
   :verifyCipherRuntime --no-configuration-cache --console=plain
 python3 -m unittest discover -s integrations -p 'test_*.py'
 
+python3 "$Q/integrations/verify-vendored-quackjs.py" "$WORK/innertubex"
 cd "$WORK/innertubex"
-./gradlew --no-daemon -PuseMavenLocalQuackJS \
-  -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT \
+./gradlew --no-daemon -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT \
   -I "$Q/integrations/verify-runtime.init.gradle" :verifyCipherRuntime \
   desktopTest testAndroidHostTest ktlintCheck apiCheck assemble publishToMavenLocal :harness:test \
   --no-configuration-cache --console=plain
@@ -93,9 +93,13 @@ cd "$WORK/Metrolist-KMP"
 
 The QuackJS root coordinate is **`meow.nyx:quackjs:0.1.0-SNAPSHOT`**. It publishes Android AAR, JVM JAR, Linux x64 and both existing iOS klibs with KMP module metadata. Android and JVM classes target Java 17 (major 61), while compilation uses JDK 21. AGP is `com.android.kotlin.multiplatform.library:9.4.1`, Kotlin is `2.4.20`, Android compile/min SDK are 37/23, matching InnerTubeX. Production variants depend only on Kotlin stdlib (and its usual transitive annotations). QuickJS exists only in QuackJS's JVM **oracle tests**, not in a publication.
 
-The locally verified InnerTubeX coordinate is **`com.github.MetrolistGroup.innertubex:innertubex:v0.10.0-quackjs-SNAPSHOT`**. The explicit `GROUP` override matches the real KMP group consumed by Metrolist; InnerTubeX's default local group differs from JitPack's exposed KMP group. These are actual Maven Local artifacts, not claimed remote releases. The companion patch neither bumps the app version nor changes its remote dependency pin. Existing `-PuseMavenLocalInnerTubeX` resolves both InnerTubeX and its transitive QuackJS publication; do not combine it with `-PuseLocalInnerTubeX`.
+The locally verified InnerTubeX coordinate is **`com.github.MetrolistGroup.innertubex:innertubex:v0.10.0-quackjs-SNAPSHOT`**. The explicit `GROUP` override matches the real KMP group consumed by Metrolist; InnerTubeX's default local group differs from JitPack's exposed KMP group. These are actual Maven Local artifacts, not claimed remote releases. The companion patch neither bumps the app version nor changes its remote dependency pin. Existing `-PuseMavenLocalInnerTubeX` resolves InnerTubeX and its same-group/version QuackJS module transitively; do not combine it with `-PuseLocalInnerTubeX`.
 
-The init script resolves Android/JVM **production** configurations and fails on QuickJS components. It confirms Android selects `quackjs-android`/AAR and desktop selects `quackjs-jvm`/JAR. It intentionally uses `--no-configuration-cache` and an explicitly qualified task path such as `:verifyCipherRuntime`, not the unqualified selector that also invokes unrelated subproject tasks.
+**Default build and CI/JitPack:** there is no remotely published `meow.nyx:quackjs:0.1.0-SNAPSHOT` to assume. The InnerTubeX patch therefore includes the exact five QuackJS common source files as a `:quackjs` KMP module and uses `implementation(project(":quackjs"))`. It builds without Maven Local, a separate checkout, an opt-in property or prepublication. The existing CI and JitPack commands build and publish the module automatically. The exact CI command `./gradlew --no-daemon clean allTests ktlintCheck apiCheck assemble publishToMavenLocal --no-build-cache --no-configuration-cache --console=plain` passed with no QuackJS property or prepublication. Its group/version inherit InnerTubeX's publication properties, so published consumers depend on `com.github.MetrolistGroup.innertubex:quackjs:v0.10.0-quackjs-SNAPSHOT` and its Android/desktop/iOS variants, not an unreachable standalone snapshot. The standalone QuackJS publication above remains independently verified but is not a dependency of this self-contained migration.
+
+`quackjs/UPSTREAM.json` records source hashes and the source commit. This source copy is required only until there is an actual usable remote QuackJS release. When integrating the separate core worker, synchronize the five `src/commonMain/kotlin/meow/nyx/quackjs/*.kt` files into the private InnerTubeX copy's `quackjs/src/commonMain/kotlin/meow/nyx/quackjs/`, update that provenance, regenerate `innertubex.patch` against the same captured baseline, and rerun the commands above. Do not ship a different core from the one verified here. `python3 integrations/verify-vendored-quackjs.py /path/to/private/innertubex` fails on stale or extra core files or stale provenance hashes. The module's generated `quackjs/api/desktop/quackjs.api` is checked by the existing `apiCheck` workflow too. For an intentional core API change, run `./gradlew :quackjs:desktopApiDump`, review its diff, then run `apiCheck` separately; do not disable validation or regenerate it automatically during checks.
+
+The init script resolves Android/JVM **production** configurations and fails on QuickJS components. It confirms Android selects `quackjs-android`/AAR and desktop selects the standalone `quackjs-jvm` or self-contained InnerTubeX `quackjs-desktop`/JAR. It intentionally uses `--no-configuration-cache` and an explicitly qualified task path such as `:verifyCipherRuntime`, not the unqualified selector that also invokes unrelated subproject tasks.
 
 ## Migration behavior
 
@@ -109,7 +113,7 @@ Malformed signatures/n challenges and unsupported players keep the existing call
 
 `prewarmEjs()` and `setPreprocessedPlayerCache(read, write)` remain documented binary-compatible **no-ops**, including never invoking the storage callbacks. `preloadPlayerCode(playerUrl)` downloads and compiles the Kotlin program. Existing app EJS storage is ignored, not deleted or mutated. No background native runtime or idle-release thread is needed.
 
-Metrolist's minimal companion removes QuickJS ProGuard and native-platform stripping/allowlist entries and documents the local publication workflow. The historical APK size table remains identified as historical; no fresh release-size claim is made.
+Metrolist's companion documents the local publication workflow. Its default `innerTubeXVersion=b5f8b6f1bc` still uses QuickJS, so the original ProGuard keep rule, native stripping map and native allowlist are retained byte-for-byte. Removing those before the default pin migrates breaks the default desktop release. They do not introduce QuickJS into the selected QuackJS-free dependency graph. Remove the legacy rules only together with a future verified default dependency migration. The historical APK size table remains identified as historical; no fresh release-size claim is made. A full verification run also exposed an existing backend-test leak: the no-counterpart stream test injected only the authoritative lookup, leaving fallback search and song lookup on the global repository. The companion injects empty/null fallback results too, preserving every assertion and preventing real-network-dependent results. No application UI or production behavior is changed.
 
 ## Verification and limits
 

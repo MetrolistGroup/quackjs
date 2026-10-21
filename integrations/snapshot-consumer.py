@@ -73,8 +73,14 @@ def snapshot(source, destination):
 
 
 def verify(root, manifest):
+    expected_files = set(manifest["sha256"])
+    actual_files = {str(path.relative_to(root)) for path in root.rglob("*")
+                    if not excluded(path.relative_to(root)) and (path.is_file() or path.is_symlink())}
+    if actual_files != expected_files:
+        raise ValueError("Snapshot file set differs: missing=" + repr(sorted(expected_files - actual_files))
+                         + ", extra=" + repr(sorted(actual_files - expected_files)))
     failures = [name for name, expected in manifest["sha256"].items()
-                if not (root / name).is_file() or hashlib.sha256((root / name).read_bytes()).hexdigest() != expected]
+                if (root / name).is_symlink() or hashlib.sha256((root / name).read_bytes()).hexdigest() != expected]
     if failures:
         raise ValueError("Snapshot differs: " + ", ".join(failures))
 
@@ -88,7 +94,7 @@ def main():
     args = parser.parse_args()
     if args.verify:
         verify(args.source, json.loads(args.manifest.read_text()))
-        print("All baseline file hashes match")
+        print("Baseline file set and all hashes match")
     else:
         if args.destination is None:
             parser.error("destination is required when copying")

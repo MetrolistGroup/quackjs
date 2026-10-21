@@ -8,13 +8,16 @@ gradle.afterProject { project ->
             def selected = project.configurations.findAll { it.canBeResolved && it.name in names }
             assert !selected.empty : "No production runtime configurations in ${project.path}"
             selected.each { configuration ->
-                def components = configuration.incoming.resolutionResult.allComponents*.id*.displayName
-                assert !components.any { it.toLowerCase().contains('quickjs') || it.contains('io.github.dokar3') } : components
-                def artifacts = configuration.resolvedConfiguration.resolvedArtifacts
-                assert artifacts.any { it.moduleVersion.id.group == 'meow.nyx' && it.name.startsWith('quackjs') } || project.name == 'quackjs'
+                def graph = configuration.incoming.resolutionResult
+                def unresolved = graph.allDependencies.findAll { it instanceof org.gradle.api.artifacts.result.UnresolvedDependencyResult }
+                assert unresolved.empty : unresolved*.attempted
+                def components = graph.allComponents
+                def ids = components*.id*.displayName
+                assert !ids.any { it.toLowerCase().contains('quickjs') || it.contains('io.github.dokar3') } : ids
+                assert components.any { it.moduleVersion?.name?.startsWith('quackjs') }
                 println("VERIFIED ${project.path}:${configuration.name}")
-                artifacts.findAll { it.moduleVersion.id.group in ['meow.nyx', 'com.github.MetrolistGroup.innertubex'] }.each {
-                    println("  ${it.moduleVersion.id} -> ${it.file.name}")
+                components.findAll { it.moduleVersion?.name?.startsWith('quackjs') || it.moduleVersion?.name?.startsWith('innertubex') }.each {
+                    println("  ${it.id.displayName}")
                 }
             }
         }

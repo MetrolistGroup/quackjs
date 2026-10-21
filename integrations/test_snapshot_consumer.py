@@ -32,6 +32,17 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual({".env", "local.properties"}, set(manifest["excluded"]))
             self.assertEqual(["deleted.kt"], manifest["missing"])
             snapshot_consumer.verify(destination, json.loads(json.dumps(manifest)))
+            (destination / "extra.kt").write_text("untested source")
+            with self.assertRaisesRegex(ValueError, "extra.kt"):
+                snapshot_consumer.verify(destination, manifest)
+            (destination / "extra.kt").unlink()
+            # A newly tracked source must not be accepted against an older exact baseline.
+            (source / "new.kt").write_text("new tracked code")
+            subprocess.run(["git", "-C", str(source), "add", "new.kt"], check=True)
+            newer = root / "newer-snapshot"
+            snapshot_consumer.snapshot(source, newer)
+            with self.assertRaisesRegex(ValueError, "new.kt"):
+                snapshot_consumer.verify(newer, manifest)
             (destination / "source.kt").write_text("changed")
             with self.assertRaises(ValueError):
                 snapshot_consumer.verify(destination, manifest)

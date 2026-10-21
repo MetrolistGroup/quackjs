@@ -29,74 +29,89 @@
     },
     {
       "directory": "QuackJS",
-      "command": "./gradlew -I integrations/verify-runtime.init.gradle verifyCipherRuntime --no-configuration-cache --console=plain",
+      "command": "./gradlew --no-daemon -I integrations/verify-runtime.init.gradle :verifyCipherRuntime --no-configuration-cache --console=plain",
       "result": "PASS",
       "notes": "Resolved production androidRuntimeClasspath and jvmRuntimeClasspath contain no QuickJS components.",
-      "log": "/tmp/quackjs-integration-logs/quackjs-runtime.log"
+      "log": "/tmp/quackjs-integration-logs/review-quackjs-runtime.log"
     },
     {
       "directory": "Private InnerTubeX snapshot",
-      "command": "./gradlew --no-daemon -PuseMavenLocalQuackJS -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT -I $Q/integrations/verify-runtime.init.gradle :verifyCipherRuntime desktopTest testAndroidHostTest ktlintCheck apiCheck assemble publishToMavenLocal :harness:test --no-configuration-cache --console=plain",
+      "command": "./gradlew --no-daemon clean allTests ktlintCheck apiCheck assemble publishToMavenLocal --no-build-cache --no-configuration-cache --console=plain",
       "result": "PASS",
       "tests": { "desktopTest": 379, "testAndroidHostTest": 373, "harnessTest": 29, "failures": 0, "skipped": 0 },
-      "notes": "Public API baseline unchanged. Actual Maven Local Android AAR and JVM JAR dependency variants resolved; no JNI substitution. Existing iOS main and test sources compiled as part of assembly; no Apple execution.",
-      "log": "/tmp/quackjs-integration-logs/innertubex-final-3.log"
+      "notes": "Exact default CI command, no QuackJS opt-in or prepublication. Self-contained :quackjs source module built and published automatically. InnerTubeX public API baseline unchanged; generated :quackjs desktop API baseline also checked. Existing iOS main and test sources compiled; no Apple execution.",
+      "log": "/tmp/quackjs-integration-logs/review-default-innertubex-final.log"
     },
     {
       "directory": "Private InnerTubeX snapshot",
-      "command": "./gradlew --no-daemon -PuseMavenLocalQuackJS -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT testAndroidHostTest ktlintCheck --console=plain",
+      "command": "./gradlew --no-daemon -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT -I $Q/integrations/verify-runtime.init.gradle :verifyCipherRuntime publishToMavenLocal --no-configuration-cache --console=plain",
       "result": "PASS",
-      "notes": "Reran after strengthening the AAR packaging test to inspect nested classes.jar as well as outer entries.",
-      "log": "/tmp/quackjs-integration-logs/innertubex-packaging-final.log"
+      "notes": "Actual same-group/version InnerTubeX and quackjs Android/desktop/iOS publications. Metadata inspected: no external meow.nyx SNAPSHOT dependency; quackjs variants depend only on stdlib. Default source builds do not read Maven Local.",
+      "log": "/tmp/quackjs-integration-logs/review-publish-innertubex-2.log"
     },
     {
       "directory": "QuackJS",
-      "command": "./gradlew --no-daemon -p integrations/published-consumer test --console=plain",
+      "command": "./gradlew --no-daemon -p integrations/published-consumer test --rerun-tasks --console=plain",
       "result": "PASS",
       "tests": { "tests": 2, "failures": 0, "skipped": 0 },
-      "notes": "Only published Maven Local InnerTubeX/QuackJS artifacts. Four full players, both hinted and hint-free compilation, all 124 independent golden cases repeated in batches per mode, plus single signature/n helpers and one-download reuse. No source substitution or QuickJS dependency.",
-      "log": "/tmp/quackjs-integration-logs/published-consumer.log"
+      "notes": "Only published Maven Local InnerTubeX and same-group/version QuackJS artifacts. Four full players, both hinted and hint-free compilation, all 124 independent golden cases repeated in batches per mode, plus single signature/n helpers and one-download reuse. No source substitution or QuickJS dependency.",
+      "log": "/tmp/quackjs-integration-logs/review-published-consumer.log"
     },
     {
       "directory": "Private Metrolist-KMP snapshot",
       "command": "./gradlew --no-daemon -PuseMavenLocalInnerTubeX -PinnerTubeXVersion=v0.10.0-quackjs-SNAPSHOT -Pmetrolist.sourceRevision= -I $Q/integrations/verify-runtime.init.gradle :shared:verifyCipherRuntime :shared:desktopTest :shared:testAndroidHostTest :androidApp:assembleDebug :desktopApp:assemble --no-configuration-cache --console=plain",
       "result": "PASS",
       "tests": { "desktopTest": 1827, "desktopSkipped": 4, "testAndroidHostTest": 1226, "testServerWithoutReflection": 52, "failures": 0 },
-      "notes": "Four existing opt-in live-test skips; no test coverage disabled. Full debug APK and desktop assembly succeeded. Both Android and desktop resolved actual local InnerTubeX and transitive QuackJS variants.",
-      "log": "/tmp/quackjs-integration-logs/metrolist-full-3.log"
+      "notes": "Four existing opt-in live-test skips; no assertions or coverage disabled. Fixed an existing backend fixture's unintended global search/song lookups by injecting empty/null results. Full debug APK and desktop assembly succeeded with actual local InnerTubeX and same-group/version QuackJS variants. Legacy default-pin packaging files remain byte-identical to the baseline.",
+      "log": "/tmp/quackjs-integration-logs/review-metrolist-final.log"
     },
     {
       "directory": "Private Metrolist-KMP snapshot",
-      "command": "./gradlew -PuseMavenLocalInnerTubeX -PinnerTubeXVersion=v0.10.0-quackjs-SNAPSHOT -Pmetrolist.sourceRevision= :shared:dependencies --configuration desktopRuntimeClasspath :desktopApp:ktlintKotlinScriptCheck :shared:compileKotlinDesktop :shared:compileAndroidMain --console=plain",
+      "command": "./gradlew --no-daemon :desktopApp:dependencies --configuration jvmRuntimeClasspath :desktopApp:ktlintKotlinScriptCheck --no-configuration-cache --console=plain",
       "result": "PASS",
-      "log": "/tmp/quackjs-integration-logs/metrolist-build.log"
+      "notes": "Default b5f8b6f1bc pin still resolves QuickJS 1.0.15. All three original native stripping/allowlist/ProGuard files were SHA-256 checked against the captured baseline and are unchanged; default release behavior is preserved.",
+      "log": "/tmp/quackjs-integration-logs/review-default-metrolist.log"
     },
     {
       "directory": "Private Metrolist-KMP snapshot",
       "command": "Python zipfile check of the assembled APK: reject quickjs/yt_ejs entry names and com/dokar/quickjs descriptors in every DEX",
       "result": "PASS",
       "artifact": "androidApp/build/outputs/apk/debug/androidApp-debug.apk",
-      "sha256": "6d1e7563971a69ea2e339eb3c4bd92644037f06154a6aba3318e3742deb7927f"
+      "sha256": "ead3b846062f33a9091dd528b410d15521c7de0bb21019f4c7675982aa34531a"
     },
     {
       "directory": "QuackJS",
       "command": "python3 -m unittest discover -s integrations -p 'test_*.py'",
       "result": "PASS",
       "tests": { "tests": 1, "failures": 0 },
-      "notes": "Dirty tracked contents, deleted/untracked files, secret exclusions, source preservation, destination protection and hash mismatch checks. Real Metrolist snapshot additionally exercised recursive initialized-submodule capture."
+      "notes": "Dirty tracked contents, deleted/untracked files, secret exclusions, source preservation, destination protection, hash mismatches, unexpected files and a fresh snapshot containing a newly tracked source. Real Metrolist snapshot additionally exercised recursive initialized-submodule capture."
+    },
+    {
+      "directory": "QuackJS",
+      "command": "python3 integrations/verify-vendored-quackjs.py /tmp/quackjs-consumers-mvhec420/innertubex",
+      "result": "PASS",
+      "notes": "All five vendored common source files match this checkout byte-for-byte, with exact provenance hashes. Run again after integrating the separate core lane."
     },
     {
       "directory": "Fresh private baseline copies",
       "command": "git apply --check --index <patch>; git apply --index <patch>; compare git write-tree with tested migration",
       "result": "PASS",
-      "notes": "Both final patches recreate the tested staged trees exactly; see application-results.json for patch digests and trees."
+      "notes": "Both final baseline file sets and hashes verified before application; patched staged trees exactly match tested migrations. See application-results.json for patch digests and trees."
     }
+  ],
+  "reviewFixes": [
+    "Default InnerTubeX/CI/JitPack builds use a checked-in QuackJS source module instead of an unavailable external SNAPSHOT; both modules publish together at matching group/version.",
+    "Metrolist's original release handling is retained while its default dependency still uses QuickJS.",
+    "Snapshot verification compares the complete nonexcluded file set and hashes; extra tracked or untracked source files fail."
   ],
   "retryNotes": [
     "Initial formatting found correctable Kotlin style issues; fixed without changing meaningful coverage.",
     "An unqualified init-task selector also invoked the unrelated harness task; qualified :verifyCipherRuntime resolved the intended configurations.",
     "Two shared Gradle daemons received external stop commands. Commands were rerun with --no-daemon.",
-    "One Metrolist test run reported missing InnerTubeX classes while the same Maven Local snapshot was being republished concurrently. With publication finished, the full ordered rerun passed unchanged; do not republish snapshot JARs during consuming JVM tests."
+    "One Metrolist test run reported missing InnerTubeX classes while the same Maven Local snapshot was being republished concurrently. With publication finished, the full ordered rerun passed unchanged; do not republish snapshot JARs during consuming JVM tests.",
+    "Raw artifact enumeration is ambiguous for AGP project-dependency variants. The verification init script now checks the resolved component graph and rejects unresolved dependencies; real compile/assemble/consumer tests fetch the artifacts.",
+    "The new module API baseline was generated with :quackjs:desktopApiDump. Running dump and check in the same Gradle invocation triggers the validator plugin's implicit-output-dependency error; the separate default CI invocation passed with validation enabled.",
+    "A Metrolist no-counterpart backend test intermittently found a real network result through uninjected global fallback callbacks. The fixture now injects empty search and null song lookup; its assertions and production code are unchanged, and the complete suite passes."
   ],
   "notChecked": [
     "Live authenticated or signed-out YouTube playback",
@@ -105,6 +120,6 @@
     "Desktop release ProGuard/distributable packaging",
     "Remote publication",
     "APK-size or performance claims",
-    "Separate core worker's final changes after integration: republish and rerun these commands on the combined branch"
+    "Separate core worker's final changes after integration: synchronize the vendored source and provenance, verify with integrations/verify-vendored-quackjs.py, review any generated module API diff, republish and rerun on the combined branch"
   ]
 }

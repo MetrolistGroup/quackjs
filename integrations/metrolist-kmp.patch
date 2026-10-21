@@ -1,75 +1,5 @@
-diff --git a/desktopApp/build.gradle.kts b/desktopApp/build.gradle.kts
-index 231ac9da830cce0ba3c04e259633eb27e5dc5942..e08c9b8cdc43fa4ca86eb5caf0a857c5b530a94b 100755
---- a/desktopApp/build.gradle.kts
-+++ b/desktopApp/build.gradle.kts
-@@ -124,7 +124,7 @@ val platformSqliteJdbc =
-         }
-     }
-
--// JNA, QuickJS and WRY bundle natives for every OS. Release jars keep only this platform's, whatever
-+// JNA and WRY bundle natives for every OS. Release jars keep only this platform's, whatever
- // library versions resolved; ProGuard output feeds every release package.
- val jnaPlatform =
-     when (platform) {
-@@ -132,18 +132,11 @@ val jnaPlatform =
-         "mac" -> if (isArm64) "darwin-aarch64" else "darwin-x86-64"
-         else -> if (isArm64) "linux-aarch64" else "linux-x86-64"
-     }
--val quickJsPlatform =
--    when (platform) {
--        "win" -> "windows_x64"
--        "mac" -> if (isArm64) "macos_aarch64" else "macos_x64"
--        else -> if (isArm64) "linux_aarch64" else "linux_x64"
--    }
- tasks.matching { it.name == "proguardReleaseJars" }.configureEach {
-     // Jar name prefix -> the only native directory to keep. JNA and WRY share platform names.
-     val keptNatives =
-         mapOf(
-             "jna-5" to "com/sun/jna/$jnaPlatform/",
--            "quickjs-jvm-" to "jni/$quickJsPlatform/",
-             "wrywebview-" to "$jnaPlatform/",
-         )
-     val outputFiles = outputs.files
-diff --git a/desktopApp/packaging-integrity.gradle.kts b/desktopApp/packaging-integrity.gradle.kts
-index c892b32dc0a886539c4fe3a0646ef0bb0d0551e6..3a8347f2ea15a790e2ea15ca544cbfb2e7039904 100644
---- a/desktopApp/packaging-integrity.gradle.kts
-+++ b/desktopApp/packaging-integrity.gradle.kts
-@@ -30,12 +30,6 @@ val jnaPlatform =
-         "mac" -> if (isArm64) "darwin-aarch64" else "darwin-x86-64"
-         else -> if (isArm64) "linux-aarch64" else "linux-x86-64"
-     }
--val quickJsPlatform =
--    when (platform) {
--        "win" -> "windows_x64"
--        "mac" -> if (isArm64) "macos_aarch64" else "macos_x64"
--        else -> if (isArm64) "linux_aarch64" else "linux_x64"
--    }
- val sqliteNativePath =
-     when (platform) {
-         "win" -> "Windows/${if (isArm64) "aarch64" else "x86_64"}"
-@@ -188,7 +182,7 @@ val verifyReleaseDistributableJars =
-         inputs.dir(sharedClasses)
-
-         val expectedSqlitePrefix = "org/sqlite/native/$sqliteNativePath/"
--        val keptNativePrefixes = listOf("com/sun/jna/$jnaPlatform/", "jni/$quickJsPlatform/", "$jnaPlatform/")
-+        val keptNativePrefixes = listOf("com/sun/jna/$jnaPlatform/", "$jnaPlatform/")
-         val ffmpegPlatform =
-             when (platform) {
-                 "win" -> "windows-x86_64"
-diff --git a/desktopApp/proguard-rules.pro b/desktopApp/proguard-rules.pro
-index a56fcc593ef96a16ff08368c5847d8303f071299..c605a7a9f54f9e579b88d3223e2d51c515ea4b8f 100644
---- a/desktopApp/proguard-rules.pro
-+++ b/desktopApp/proguard-rules.pro
-@@ -7,7 +7,6 @@
- }
-
- # JNI and reflection-backed libraries.
---keep class com.dokar.quickjs.** { *; }
- -keep class com.sun.jna.** { *; }
- -keep interface com.sun.jna.** { *; }
- #noinspection ShrinkerUnresolvedReference
 diff --git a/docs/android-apk-size.md b/docs/android-apk-size.md
-index 7d20e27110e6597d9ad08116a455119b1c4b7500..86c1abfdcb1085ac969262090aa122dde9afe321 100644
+index 7d20e27110e6597d9ad08116a455119b1c4b7500..d0663a3b1a6a729f151990168b1339666efb2b2c 100644
 --- a/docs/android-apk-size.md
 +++ b/docs/android-apk-size.md
 @@ -27,7 +27,7 @@ DEX class counts can show which namespaces dominate (Compose, Media3, Ktor, Guav
@@ -77,12 +7,12 @@ index 7d20e27110e6597d9ad08116a455119b1c4b7500..86c1abfdcb1085ac969262090aa122dd
 
  - ABI-specific delivery is the only meaningful remaining lever. Removing the three non-arm64 ABIs saves at most 2,115,467 compressed bytes. Releases intentionally ship one universal APK, so this would mean publishing and testing per-ABI artifacts.
 -- Removing QuickJS or Sentry is not supported. Their native sizes are upper bounds, not real savings once the features are gone.
-+- The measurements above predate the QuickJS-free InnerTubeX integration. QuackJS uses Kotlin player programs and removes the cipher native runtime; remeasure a fresh APK before claiming savings. Sentry remains supported and bundled in release.
++- The measurements above predate the opt-in QuickJS-free InnerTubeX integration. That publication uses Kotlin player programs and removes the cipher native runtime; the unchanged default dependency still uses QuickJS. Remeasure a fresh APK before claiming savings. Sentry remains supported and bundled in release.
  - Deleting translations or images to chase size is not warranted.
  - Installed footprint is not APK size. A device extracts only its own ABI's natives (about 1.76 MB raw on arm64 with legacy packaging), and ART data, caches and downloads vary.
 
 diff --git a/docs/innertube.md b/docs/innertube.md
-index 55b5a6c5f773859867fe43dbe2b7a9654b1830e3..59c441966b3a8a57db766df736c8fa84e44eb802 100644
+index 55b5a6c5f773859867fe43dbe2b7a9654b1830e3..6804b03655396ba66ed32a9d731bd77108971688 100644
 --- a/docs/innertube.md
 +++ b/docs/innertube.md
 @@ -2,6 +2,18 @@
@@ -93,14 +23,36 @@ index 55b5a6c5f773859867fe43dbe2b7a9654b1830e3..59c441966b3a8a57db766df736c8fa84
 +
 +Use an InnerTubeX publication migrated to QuackJS, not the unchanged remote release. No app version or remote dependency pin is changed by this companion patch.
 +
-+1. In QuackJS, run `./gradlew jvmTest testAndroidHostTest assemble publishToMavenLocal`.
-+2. In the privately migrated InnerTubeX snapshot, run `./gradlew -PuseMavenLocalQuackJS -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT desktopTest testAndroidHostTest apiCheck assemble publishToMavenLocal`.
++1. Optionally verify the standalone QuackJS publication with `./gradlew jvmTest testAndroidHostTest assemble publishToMavenLocal`. InnerTubeX does not depend on this unpublished coordinate.
++2. In the privately migrated InnerTubeX snapshot, run `./gradlew -PGROUP=com.github.MetrolistGroup.innertubex -PVERSION_NAME=v0.10.0-quackjs-SNAPSHOT desktopTest testAndroidHostTest apiCheck assemble publishToMavenLocal`. Its checked-in `quackjs` source module is built and published at the same group/version automatically, including by the unchanged CI/JitPack commands. No Maven Local opt-in is needed to build InnerTubeX itself.
 +3. In Metrolist, use `./gradlew -PuseMavenLocalInnerTubeX -PinnerTubeXVersion=v0.10.0-quackjs-SNAPSHOT :shared:desktopTest :shared:testAndroidHostTest :androidApp:assembleDebug :desktopApp:assemble`. This uses the existing Maven Local opt-in and actual locally published InnerTubeX coordinates, with QuackJS resolved transitively. Do not combine this with `-PuseLocalInnerTubeX`.
 +
 +`prewarmEjs` and the preprocessed-player-cache APIs are compatibility no-ops; persisted EJS data is ignored. Player preloads now compile Kotlin programs. Faraday supplies optional landmarks and unknown players use hint-free discovery. Unsupported player constructs return the existing extraction failure/null result, never a QuickJS fallback or unresolved signed URL. QuackJS currently handles the four verified dispatcher-style players, not arbitrary JavaScript or future player rotations.
 +
-+Desktop packaging no longer strips, permits or keeps QuickJS natives/classes. The APK size measurements in [android-apk-size.md](android-apk-size.md) are historical and must be rerun for this dependency graph. Live tests below remain opt-in; local fixture/build checks do not establish live playback compatibility.
++The default `innerTubeXVersion=b5f8b6f1bc` still uses QuickJS, so its existing native stripping, allowlist and ProGuard keep rules remain intact until that default dependency is migrated. They add no runtime to the opt-in QuackJS-free publication; the selected dependency graph determines whether QuickJS exists. Remove the legacy packaging rules together with a future verified default pin migration, not before. The APK size measurements in [android-apk-size.md](android-apk-size.md) are historical and must be rerun for the migrated dependency graph. Live tests below remain opt-in; local fixture/build checks do not establish live playback compatibility.
 +
  ## Client catalog
 
  The retained SABR catalog has six end-to-end validated automatic fallbacks: `ANDROID_VR_SABR`, `WEB_REMIX_SABR`, `WEB_SABR`, `TVHTML5_SIMPLY_SABR`, `MWEB_SABR` and `WEB_SAFARI_SABR`.
+diff --git a/shared/src/commonTest/kotlin/com/metrolist/shared/youtube/playback/DefaultStreamResolverTest.kt b/shared/src/commonTest/kotlin/com/metrolist/shared/youtube/playback/DefaultStreamResolverTest.kt
+index 758e118c806c6f99e7a0b20e78fbbfa003f4776d..202843ccb95115f62f2faa8f34cbce7d2c9abcf0 100644
+--- a/shared/src/commonTest/kotlin/com/metrolist/shared/youtube/playback/DefaultStreamResolverTest.kt
++++ b/shared/src/commonTest/kotlin/com/metrolist/shared/youtube/playback/DefaultStreamResolverTest.kt
+@@ -15,6 +15,7 @@ import com.metrolist.innertubex.extraction.strategy.ClientFailureKind
+ import com.metrolist.innertubex.extraction.strategy.ClientHealthScope
+ import com.metrolist.shared.api.musicvideo.MusicVideoCounterpart
+ import com.metrolist.shared.api.musicvideo.MusicVideoResolver
++import com.metrolist.shared.model.SearchResultPage
+ import com.metrolist.shared.model.SongItem
+ import com.metrolist.shared.playback.PlaybackFailureCategory
+ import com.metrolist.shared.settings.Settings
+@@ -650,7 +651,9 @@ class DefaultStreamResolverTest {
+                     innerTube = InnerTube(HttpClient(MockEngine { respondOk() })),
+                     musicVideoResolver =
+                         MusicVideoResolver(
++                            search = { _, _ -> SearchResultPage(emptyList(), null) },
+                             counterpartLookup = { null },
++                            songLookup = { null },
+                         ),
+                     networkStateFlow = null,
+                 )

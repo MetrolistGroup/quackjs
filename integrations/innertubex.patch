@@ -1,5 +1,5 @@
 diff --git a/README.md b/README.md
-index b8a96c73dda881712f624621f4349db044c11135..b097b7aaa2ba89d8f8b1df0ff05680abbd72d3ed 100644
+index b8a96c73dda881712f624621f4349db044c11135..748a0be38fd06ef2058454786c89e1f4833685d5 100644
 --- a/README.md
 +++ b/README.md
 @@ -10,7 +10,10 @@ playlist, and player operations while adding:
@@ -10,12 +10,12 @@ index b8a96c73dda881712f624621f4349db044c11135..b097b7aaa2ba89d8f8b1df0ff05680ab
 +- Player cipher deobfuscation through QuackJS's bounded Kotlin PlayerProgram, with optional Faraday hints and hint-free discovery. No JavaScript engine or native cipher library is bundled. Unsupported player syntax fails closed; this is not a general JavaScript interpreter.
 +- `prewarmEjs()` and `setPreprocessedPlayerCache()` remain binary-compatible no-ops. Use `preloadPlayerCode(playerUrl)` to download and compile a player. Existing preprocessed-player storage is never read or written.
 +
-+Local integration: publish QuackJS `meow.nyx:quackjs:0.1.0-SNAPSHOT` to Maven Local first, then pass `-PuseMavenLocalQuackJS` to InnerTubeX Gradle commands. This snapshot coordinate is local-only, not a published remote release.
++The `quackjs` source module makes ordinary checkout, CI and JitPack builds self-contained; no unpublished external snapshot or Maven Local opt-in is required. It publishes with the same group/version as InnerTubeX, so published consumers resolve its platform variants transitively. `quackjs/UPSTREAM.json` pins the copied QuackJS source files; keep them synchronized when updating the runtime. The standalone `meow.nyx:quackjs` artifact is not a dependency of this self-contained integration.
  - Layered remote, parsed-script, and cached cipher fallbacks.
  - Isolated authenticated sessions with generation-safe cancellation.
  - Channel discovery, account switching support, and streaming music uploads.
 diff --git a/build.gradle.kts b/build.gradle.kts
-index 29c5acc9649398eb3777b194b6a057917d6e17d9..7d08ee27d79a2d120856ae82fd8f07cbe321c18b 100644
+index 29c5acc9649398eb3777b194b6a057917d6e17d9..1af67a92a003cf1826b3e7e512d856562e6e1a1c 100644
 --- a/build.gradle.kts
 +++ b/build.gradle.kts
 @@ -2,7 +2,6 @@
@@ -78,7 +78,7 @@ index 29c5acc9649398eb3777b194b6a057917d6e17d9..7d08ee27d79a2d120856ae82fd8f07cb
              api(libs.kotlinx.serialization.json)
              api(libs.kotlinx.coroutines.core)
 -            implementation(libs.quickjs)
-+            implementation("meow.nyx:quackjs:0.1.0-SNAPSHOT")
++            implementation(project(":quackjs"))
          }
          commonTest.dependencies {
              implementation(kotlin("test"))
@@ -127,20 +127,1592 @@ index 44c58e7535997e9cf9f7b9a8d4083a0301390de6..4e4a47bff7c38193a60ea86438ce66db
 
  [plugins]
  android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "androidGradlePlugin" }
+diff --git a/quackjs/UPSTREAM.json b/quackjs/UPSTREAM.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..e5dfa40d2e8405648496b968e5ba74a7684812bb
+--- /dev/null
++++ b/quackjs/UPSTREAM.json
+@@ -0,0 +1,11 @@
++{
++  "source": "QuackJS local source snapshot; no remote release is assumed",
++  "sourceCommit": "44bf937caaf60165023952ed38fd8d390d355582",
++  "sha256": {
++    "src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt": "e535091557f463d78d4142afa6a8af695522ebe4283c7dbdd2ebee203a900d0f",
++    "src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt": "7d81dcee015ce12cd73220ff970802d63616658e97ab3c10064443d02382cfe1",
++    "src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt": "c1263e84d23972e45ebd03f0d107c91723f44c694c281f9c786b90d8f9de6c57",
++    "src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt": "5e367ecc4abbc67903ce1a04a090ef3b911a2ad911efa23c83705cd27be5871d",
++    "src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt": "a6559ec98df9405f15e13f1ca1ce60be3e963c2a296e4b8154012055c63e0334"
++  }
++}
+diff --git a/quackjs/api/desktop/quackjs.api b/quackjs/api/desktop/quackjs.api
+new file mode 100644
+index 0000000000000000000000000000000000000000..27349cd6cb9ded941e0317cb4b672aa630cb1a79
+--- /dev/null
++++ b/quackjs/api/desktop/quackjs.api
+@@ -0,0 +1,32 @@
++public final class meow/nyx/quackjs/PlayerHints {
++	public fun <init> (Ljava/lang/String;Ljava/lang/String;I)V
++	public final fun component1 ()Ljava/lang/String;
++	public final fun component2 ()Ljava/lang/String;
++	public final fun component3 ()I
++	public final fun copy (Ljava/lang/String;Ljava/lang/String;I)Lmeow/nyx/quackjs/PlayerHints;
++	public static synthetic fun copy$default (Lmeow/nyx/quackjs/PlayerHints;Ljava/lang/String;Ljava/lang/String;IILjava/lang/Object;)Lmeow/nyx/quackjs/PlayerHints;
++	public fun equals (Ljava/lang/Object;)Z
++	public final fun getNClass ()Ljava/lang/String;
++	public final fun getSignatureExpression ()Ljava/lang/String;
++	public final fun getSignatureTimestamp ()I
++	public fun hashCode ()I
++	public fun toString ()Ljava/lang/String;
++}
++
++public final class meow/nyx/quackjs/PlayerProgram {
++	public static final field Companion Lmeow/nyx/quackjs/PlayerProgram$Companion;
++	public synthetic fun <init> (Lmeow/nyx/quackjs/SourceIndex;Lmeow/nyx/quackjs/Expr;Lmeow/nyx/quackjs/NPlan;Ljava/util/Map;Ljava/lang/Integer;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
++	public final fun decipherSignature (Ljava/lang/String;)Ljava/lang/String;
++	public final fun getSignatureTimestamp ()Ljava/lang/Integer;
++	public final fun transformN (Ljava/lang/String;)Ljava/lang/String;
++}
++
++public final class meow/nyx/quackjs/PlayerProgram$Companion {
++	public final fun compile (Ljava/lang/String;Lmeow/nyx/quackjs/PlayerHints;)Lmeow/nyx/quackjs/PlayerProgram;
++	public static synthetic fun compile$default (Lmeow/nyx/quackjs/PlayerProgram$Companion;Ljava/lang/String;Lmeow/nyx/quackjs/PlayerHints;ILjava/lang/Object;)Lmeow/nyx/quackjs/PlayerProgram;
++}
++
++public final class meow/nyx/quackjs/UnsupportedPlayerException : java/lang/IllegalArgumentException {
++	public fun <init> (Ljava/lang/String;)V
++}
++
+diff --git a/quackjs/build.gradle.kts b/quackjs/build.gradle.kts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f54d90843782eff33a24ec010aceecc09a0a0af1
+--- /dev/null
++++ b/quackjs/build.gradle.kts
+@@ -0,0 +1,23 @@
++import org.jetbrains.kotlin.gradle.dsl.JvmTarget
++
++plugins {
++    alias(libs.plugins.kotlin.multiplatform)
++    alias(libs.plugins.android.kotlin.multiplatform.library)
++    `maven-publish`
++}
++
++group = rootProject.group
++version = rootProject.version
++
++kotlin {
++    android {
++        namespace = "meow.nyx.quackjs"
++        compileSdk = libs.versions.compileSdk.get().toInt()
++        minSdk = libs.versions.minSdk.get().toInt()
++        compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
++    }
++    jvm("desktop") { compilerOptions.jvmTarget.set(JvmTarget.JVM_17) }
++    iosArm64()
++    iosSimulatorArm64()
++    jvmToolchain(21)
++}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..4287d12ce8b41767ed717502f54225aff09a25ef
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Limits.kt
+@@ -0,0 +1,35 @@
++package meow.nyx.quackjs
++
++/** Left-associative chains do not consume parser recursion, but still need an AST depth cap. */
++internal fun validateDepth(root: Expr) {
++    val pending = ArrayDeque<Pair<Any, Int>>()
++    pending.addLast(root to 0)
++    var nodes = 0
++    while (pending.isNotEmpty()) {
++        val (node, depth) = pending.removeLast()
++        if (++nodes > 150_000) unsupported("Syntax tree node limit exceeded")
++        if (depth > 128) unsupported("Syntax tree depth limit exceeded")
++        fun child(value: Any?) { if (value != null) pending.addLast(value to depth + 1) }
++        when (node) {
++            is Unary -> child(node.expr)
++            is Binary -> { child(node.left); child(node.right) }
++            is Conditional -> { child(node.test); child(node.yes); child(node.no) }
++            is Member -> { child(node.target); child(node.key) }
++            is Call -> { child(node.fn); node.args.forEach(::child) }
++            is Update -> child(node.target)
++            is ArrayExpr -> node.items.forEach(::child)
++            is ObjectExpr -> node.items.forEach { child(it.second) }
++            is FunctionExpr -> child(node.body)
++            is Block -> node.statements.forEach(::child)
++            is ExpressionStmt -> child(node.expr)
++            is Vars -> node.items.forEach { child(it.second) }
++            is IfStmt -> { child(node.test); child(node.yes); child(node.no) }
++            is ReturnStmt -> child(node.expr)
++            is ThrowStmt -> child(node.expr)
++            is Loop -> { child(node.init); child(node.test); child(node.update); child(node.body) }
++            is Label -> child(node.body)
++            is TryStmt -> { child(node.body); child(node.handler); child(node.finalizer) }
++            is SwitchStmt -> { child(node.expr); node.cases.forEach { (key, statements) -> child(key); statements.forEach(::child) } }
++        }
++    }
++}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed8a63397178801713ddf86ef0dcd68394e4a04b
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/PlayerProgram.kt
+@@ -0,0 +1,394 @@
++package meow.nyx.quackjs
++
++/** Optional, externally supplied landmarks from a known player configuration. */
++public data class PlayerHints(val signatureExpression: String, val nClass: String, val signatureTimestamp: Int)
++
++public class UnsupportedPlayerException(message: String) : IllegalArgumentException(message)
++
++/** An immutable player slice. Every invocation owns its globals, arrays and execution budget. */
++public class PlayerProgram private constructor(
++    private val source: SourceIndex,
++    private val signature: Expr,
++    private val nPlan: NPlan,
++    private val parsed: Map<String, Expr>,
++    public val signatureTimestamp: Int?,
++) {
++    public fun decipherSignature(input: String): String = run(input) { runtime ->
++        runtime.expression(signature, mapOf("INPUT" to input))
++    }
++
++    public fun transformN(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
++
++    private inline fun run(input: String, transform: (Runtime) -> Any?): String {
++        if (input.length > 16_384) unsupported("Challenge length limit exceeded")
++        try {
++            val output = transform(Runtime(source, parsed).also { it.challenge = input })
++            if (output !is String) unsupported("Transform did not return a string")
++            if (output.length > 65_536) unsupported("Transform output limit exceeded")
++            return output
++        } catch (error: JsThrown) {
++            unsupported("Transform threw: ${if (error.value is String) error.value.take(160) else "JavaScript exception"}")
++        }
++    }
++
++    public companion object {
++        /** Compile a dispatcher/table-based player without running its browser initialization.
++         * Throws [UnsupportedPlayerException] for unsupported dependencies or resource limits.
++         * Source is capped at 8 Mi UTF-16 units; individual challenges at 16,384 units.
++         */
++        public fun compile(playerJs: String, hints: PlayerHints? = null): PlayerProgram {
++            if (playerJs.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
++            val derived = hints ?: derive(playerJs)
++            val source = SourceIndex(playerJs, derived.nClass)
++            if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
++            val signature = Parser(Lexer(derived.signatureExpression).tokens()).completeExpression()
++            validateSignatureExpression(signature)
++            val runtime = Runtime(source)
++            try {
++                val plan = discoverN(source, derived.nClass, runtime)
++                val result = runtime.expression(signature, mapOf("INPUT" to "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"))
++                if (result !is String) unsupported("Signature transform did not return a string")
++                return PlayerProgram(source, signature, plan, runtime.definitions.toMap(), hints?.signatureTimestamp ?: source.signatureTimestamp)
++            } catch (error: JsThrown) {
++                unsupported("Player initialization failed: ${if (error.value is String) error.value.take(160) else "JavaScript exception"}")
++            }
++        }
++
++        private fun derive(source: String): PlayerHints {
++            data class Landmark(val signature: String, val nClass: String, val locations: List<Pair<Int, String>>)
++            val candidates = mutableListOf<Landmark>()
++            var from = 0
++            while (true) {
++                val alr = source.indexOf(".set(\"alr\",\"yes\")", from)
++                if (alr < 0) break
++                from = alr + 1
++                val beforeStart = (alr - 160).coerceAtLeast(0)
++                val before = source.substring(beforeStart, alr)
++                val after = source.substring(alr, (alr + 260).coerceAtMost(source.length))
++                val n = Regex("new\\s+g\\.([A-Za-z0-9_$]+)\\s*\\([^,()]+,\\s*!0\\s*\\)").findAll(before).lastOrNull() ?: continue
++                val sig = Regex("([A-Za-z0-9_$]+)\\((\\d+),(\\d+),\\s*[A-Za-z0-9_$]+\\(\\d+,\\d+,").find(after) ?: continue
++                if (candidates.size >= 1024) unsupported("Player landmark limit exceeded")
++                candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[1],
++                    listOf(alr to ".", beforeStart + n.range.first to "new", alr + sig.range.first to sig.groupValues[1])))
++            }
++            // A landmark inside a comment, string or template is never executable code.
++            val wanted = candidates.flatMap { it.locations }.toSet()
++            val actual = mutableSetOf<Pair<Int, String>>()
++            val lexer = Lexer(source)
++            var previous: String? = null
++            var count = 0
++            val end = wanted.maxOfOrNull { it.first } ?: -1
++            while (end >= 0) {
++                val token = lexer.next(previous)
++                if (token.kind == -1 || token.offset > end) break
++                if (++count > 2_000_000) unsupported("Source token limit exceeded")
++                val location = token.offset to token.text
++                if (token.kind == 0 && location in wanted) actual.add(location)
++                previous = token.context
++            }
++            val valid = candidates.filter { actual.containsAll(it.locations) }.map { it.signature to it.nClass }.toSet()
++            if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
++            val (signature, nClass) = valid.single()
++            return PlayerHints(signature, nClass, 0)
++        }
++
++        private fun validateSignatureExpression(expr: Expr) {
++            fun argument(e: Expr): Boolean = e == Id("INPUT") || e is Lit && e.value is Double || e is Unary && e.op in setOf("+", "-") && argument(e.expr)
++            if (expr !is Call || expr.construct || expr.fn !is Id || expr.args.count { it == Id("INPUT") } != 1 || !expr.args.all(::argument)) {
++                unsupported("Signature hint must be a function call with numeric arguments and INPUT")
++            }
++        }
++    }
++}
++
++private val RootArgument = Id("<n-root>")
++private fun nArguments(runtime: Runtime, arguments: List<Expr>, root: JsObject): List<Any?> =
++    arguments.map { runtime.expression(it, mapOf(RootArgument.name to root)) }
++
++private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, val selfRoot: Boolean, val mapKey: String, val constructor: FunctionExpr, val setter: FunctionExpr) {
++    fun execute(runtime: Runtime, input: String): Any? {
++        runtime.challenge = input
++        val root = makeRoot(runtime, constructor, mapKey, input, setter)
++        runtime.invoke(JsFunction(function, Env()), if (selfRoot) root else Undefined, nArguments(runtime, arguments, root))
++        return (root.fields[mapKey] as? JsObject)?.fields?.get("n") ?: unsupported("n transform removed its result")
++    }
++}
++
++private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String?, input: String, setter: FunctionExpr): JsObject {
++    val root = JsObject()
++    runtime.invoke(JsFunction(constructor, Env()), root, listOf("", true))
++    root.fields["set"] = JsFunction(setter, Env())
++    if (mapKey != null) {
++        val map = root.fields[mapKey] as? JsObject ?: unsupported("Unsupported n parameter table")
++        map.fields["n"] = input
++    }
++    return root
++}
++
++/** Follow only calls receiving the URL instance, then execute the n-table update in isolation. */
++private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPlan {
++    val constructor = source.classFunction(name)
++    val getter = source.method(name, "get", runtime)
++    val setter = source.method(name, "set", runtime)
++    val initial = makeRoot(runtime, constructor, null, "", setter)
++    val tables = initial.fields.filterValues { it is JsObject }.keys
++    if (tables.size != 1) unsupported("Cannot identify n parameter table")
++    val mapKey = tables.single()
++    data class Candidate(val function: FunctionExpr, val args: List<Expr>, val selfRoot: Boolean, val level: Int, val label: String)
++    data class Key(val label: String, val args: List<Expr>, val selfRoot: Boolean)
++    val pending = mutableListOf(
++        Candidate(constructor, listOf(Lit(""), Lit(true)), true, 0, "constructor"),
++        Candidate(getter, listOf(Lit("n")), true, 0, "getter"),
++    )
++    val seen = mutableSetOf<Key>()
++    val probe = "KdrqFlzJXl9EcCwlmEy"
++    var cursor = 0
++    var selected: Pair<Key, NPlan>? = null
++    var lastError = "No n-table update found"
++    while (cursor < pending.size) {
++        if (pending.size > 64) unsupported("n discovery dependency limit exceeded")
++        val candidate = pending[cursor++]
++        if (candidate.level > 8) continue
++        val key = Key(candidate.label, candidate.args, candidate.selfRoot)
++        if (!seen.add(key)) {
++            if (selected?.first == key) unsupported("Ambiguous repeated n-table updates")
++            continue
++        }
++        val root = makeRoot(runtime, constructor, mapKey, probe, setter)
++        runtime.challenge = probe
++        val args = nArguments(runtime, candidate.args, root)
++        var conflicting = false
++        if (candidate.label != "constructor") {
++            try {
++                runtime.invoke(JsFunction(candidate.function, Env()), if (candidate.selfRoot) root else Undefined, args)
++                val result = (root.fields[mapKey] as? JsObject)?.fields?.get("n")
++                if (result is String && result != probe) {
++                    val plan = NPlan(candidate.function, candidate.args, candidate.selfRoot, mapKey, constructor, setter)
++                    val second = plan.execute(runtime, "0123456789abcdefghijklmno")
++                    if (second is String && second != "0123456789abcdefghijklmno" && second.length < 256) {
++                        if (selected != null) conflicting = true else selected = key to plan
++                    }
++                }
++            } catch (error: UnsupportedPlayerException) { lastError = error.message ?: lastError }
++            catch (_: JsThrown) { /* URL-only dependencies are not part of the transform. */ }
++        }
++        if (conflicting) unsupported("Ambiguous n-table updates")
++        if (selected?.first == key) continue
++        val cleanRoot = makeRoot(runtime, constructor, mapKey, probe, setter)
++        val env = runtime.functionEnv(JsFunction(candidate.function, Env()), if (candidate.selfRoot) cleanRoot else Undefined, nArguments(runtime, candidate.args, cleanRoot))
++        val bindings = mutableMapOf<String, Expr>("this" to if (candidate.selfRoot) RootArgument else Lit(Undefined))
++        candidate.function.params.forEachIndexed { i, name -> bindings[name] = candidate.args.getOrElse(i) { Lit(Undefined) } }
++        // Preserve input-derived expressions while folding the dispatcher prefix.
++        for (stmt in candidate.function.body.statements) {
++            if (stmt !is Vars) break
++            if (stmt.items.any { it.second != null && !constant(it.second!!) }) break
++            for ((name, expr) in stmt.items) if (expr != null) {
++                val bound = substitute(expr, bindings, env)
++                if (bound == null) bindings.remove(name)
++                else { validateDepth(bound); bindings[name] = bound }
++            }
++            runtime.exec(stmt, env)
++        }
++        val dynamic = bindings.filterValues(::dependsOnRoot).keys
++        walk(candidate.function.body, runtime, env, dynamic) { call, guards ->
++            var target = call.fn
++            var selfRoot = false
++            var argExprs = call.args
++            if (target is Member && target.key == Lit("call") && target.target is Id && argExprs.isNotEmpty()) {
++                if (!constant(argExprs.first())) return@walk
++                val self = substitute(argExprs.first(), bindings, env) ?: return@walk
++                if (self != RootArgument && self != Lit(Undefined)) return@walk
++                selfRoot = self == RootArgument
++                argExprs = argExprs.drop(1); target = target.target
++            }
++            if (target !is Id || call.construct || !argExprs.all(::constant)) return@walk
++            val boundArgs = argExprs.map { substitute(it, bindings, env) ?: return@walk }
++            boundArgs.forEach(::validateDepth)
++            val values = try { nArguments(runtime, boundArgs, cleanRoot) } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
++            if (!selfRoot && values.none { it === cleanRoot }) return@walk
++            if (values.any { it !== cleanRoot && it !is Double && it !is String && it !is Boolean && it !== Undefined && it != null }) return@walk
++            val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
++            if (fn !is JsFunction) return@walk
++            for (guard in guards) {
++                val bound = substitute(guard, bindings, env)
++                if (bound != null) validateDepth(bound)
++                if (bound == null || inputDependentGuard(bound, runtime, mapKey)) {
++                    lastError = "Cannot discard input-dependent n control flow"
++                    return@walk
++                }
++            }
++            if (pending.size >= 64) unsupported("n discovery dependency limit exceeded")
++            pending.add(Candidate(fn.code, boundArgs, selfRoot, candidate.level + 1, target.name))
++        }
++    }
++    return selected?.second ?: unsupported("Cannot isolate n transform: $lastError")
++}
++
++private fun constant(expr: Expr): Boolean = when (expr) {
++    is Lit, is Id -> true
++    is Unary -> expr.op in setOf("!", "~", "+", "-", "typeof", "void") && constant(expr.expr)
++    is Binary -> expr.op !in setOf("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", ">>=", "<<=", ">>>=") && constant(expr.left) && constant(expr.right)
++    is Member -> constant(expr.target) && constant(expr.key)
++    is Conditional -> constant(expr.test) && constant(expr.yes) && constant(expr.no)
++    else -> false
++}
++
++private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr? {
++    fun child(e: Expr): Expr? = substitute(e, bindings, env)
++    return when (expr) {
++        is Lit -> expr
++        is Id -> bindings[expr.name] ?: expr.takeIf { env.owner(expr.name) == null }
++        is Unary -> Unary(expr.op, child(expr.expr) ?: return null)
++        is Binary -> Binary(expr.op, child(expr.left) ?: return null, child(expr.right) ?: return null)
++        is Member -> Member(child(expr.target) ?: return null, child(expr.key) ?: return null)
++        is Conditional -> Conditional(child(expr.test) ?: return null, child(expr.yes) ?: return null, child(expr.no) ?: return null)
++        is Call -> Call(child(expr.fn) ?: return null, expr.args.map { child(it) ?: return null }, expr.construct)
++        else -> null
++    }
++}
++
++private fun dependsOnRoot(expr: Expr): Boolean = when (expr) {
++    is Id -> expr == RootArgument
++    is Unary -> dependsOnRoot(expr.expr)
++    is Binary -> dependsOnRoot(expr.left) || dependsOnRoot(expr.right)
++    is Member -> dependsOnRoot(expr.target) || dependsOnRoot(expr.key)
++    is Conditional -> dependsOnRoot(expr.test) || dependsOnRoot(expr.yes) || dependsOnRoot(expr.no)
++    else -> false
++}
++
++private fun inputDependentGuard(expr: Expr, runtime: Runtime, mapKey: String): Boolean {
++    fun rootPath(e: Expr): List<String>? {
++        if (e == RootArgument) return emptyList()
++        if (e !is Member) return null
++        val parent = rootPath(e.target) ?: return null
++        if (!constant(e.key) || dependsOnRoot(e.key)) return null
++        val key = try { text(runtime.expression(e.key)) } catch (_: UnsupportedPlayerException) { return null } catch (_: JsThrown) { return null }
++        return parent + key
++    }
++    fun sensitive(e: Expr): Boolean {
++        rootPath(e)?.let { return it.isEmpty() || it.first() == mapKey && (it.size == 1 || it[1] == "n") }
++        return when (e) {
++            is Lit, is Id -> false
++            is Unary -> sensitive(e.expr)
++            is Binary -> sensitive(e.left) || sensitive(e.right)
++            is Member -> sensitive(e.target) || sensitive(e.key)
++            is Conditional -> sensitive(e.test) || sensitive(e.yes) || sensitive(e.no)
++            is Call -> e.fn.let { it is Member && rootPath(it.target)?.isEmpty() == true } || sensitive(e.fn) || e.args.any(::sensitive)
++            else -> true
++        }
++    }
++    return sensitive(expr)
++}
++
++private fun knownTruth(expr: Expr, runtime: Runtime, env: Env, dynamic: Set<String>): Boolean? {
++    if (expr is Binary && expr.op == "&&") {
++        val left = knownTruth(expr.left, runtime, env, dynamic)
++        return if (left == false) false else if (left == true) knownTruth(expr.right, runtime, env, dynamic) else null
++    }
++    if (expr is Binary && expr.op == "||") {
++        val left = knownTruth(expr.left, runtime, env, dynamic)
++        return if (left == true) true else if (left == false) knownTruth(expr.right, runtime, env, dynamic) else null
++    }
++    fun independent(e: Expr): Boolean = when (e) {
++        is Lit -> true
++        is Id -> env.owner(e.name)?.values?.get(e.name).let { value ->
++            if (env.owner(e.name) != null) e.name !in dynamic && value !== Undefined && value !is JsObject && value !is JsArray else runtime.source.hasDefinition(e.name)
++        }
++        is Member -> independent(e.target) && independent(e.key)
++        is Unary -> constant(e) && independent(e.expr)
++        is Binary -> constant(e) && independent(e.left) && independent(e.right)
++        else -> false
++    }
++    if (!independent(expr)) return null
++    return try { truth(runtime.eval(expr, env)) } catch (_: UnsupportedPlayerException) { null } catch (_: JsThrown) { null }
++}
++
++private data class DiscoveryFlow(val guards: List<Expr> = emptyList(), val exits: Boolean = false) {
++    init { if (guards.size > 128) unsupported("n control-flow limit exceeded") }
++}
++
++private fun walk(stmt: Stmt, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr> = emptyList(), visit: (Call, List<Expr>) -> Unit): DiscoveryFlow {
++    if (guards.size > 128) unsupported("n control-flow limit exceeded")
++    fun expr(e: Expr, path: List<Expr> = guards) { walkExpression(e, runtime, env, dynamic, path, visit) }
++    fun child(s: Stmt, path: List<Expr> = guards): DiscoveryFlow = walk(s, runtime, env, dynamic, path, visit)
++    when (stmt) {
++        is Block -> {
++            val tail = mutableListOf<Expr>()
++            for (s in stmt.statements) {
++                val flow = child(s, guards + tail)
++                tail.addAll(flow.guards)
++                if (tail.size > 128) unsupported("n control-flow limit exceeded")
++                if (flow.exits) return DiscoveryFlow(tail, true)
++            }
++            return DiscoveryFlow(tail)
++        }
++        is ExpressionStmt -> expr(stmt.expr)
++        is Vars -> stmt.items.forEach { it.second?.let { e -> expr(e) } }
++        is IfStmt -> {
++            expr(stmt.test)
++            val known = knownTruth(stmt.test, runtime, env, dynamic)
++            if (known == true) return child(stmt.yes)
++            if (known == false) return stmt.no?.let { child(it) } ?: DiscoveryFlow()
++            val path = guards + stmt.test
++            val yes = child(stmt.yes, path)
++            val no = stmt.no?.let { child(it, path) } ?: DiscoveryFlow()
++            val tail = if (yes.exits || no.exits || yes.guards.isNotEmpty() || no.guards.isNotEmpty()) listOf(stmt.test) + yes.guards + no.guards else emptyList()
++            return DiscoveryFlow(tail, yes.exits && no.exits)
++        }
++        is ReturnStmt -> { stmt.expr?.let { expr(it) }; return DiscoveryFlow(exits = true) }
++        is ThrowStmt -> { expr(stmt.expr); return DiscoveryFlow(exits = true) }
++        is Jump -> return DiscoveryFlow(exits = true)
++        is Loop -> {
++            stmt.init?.let { child(it) }; stmt.test?.let { expr(it) }
++            val known = stmt.test?.let { knownTruth(it, runtime, env, dynamic) }
++            val path = if (stmt.test != null && known == null) guards + stmt.test else guards
++            stmt.update?.let { expr(it, path) }
++            if (stmt.test == null || known != false) {
++                val body = child(stmt.body, path)
++                if (body.exits || body.guards.isNotEmpty()) return DiscoveryFlow(listOfNotNull(stmt.test) + body.guards)
++            }
++        }
++        is Label -> return child(stmt.body)
++        is TryStmt -> {
++            val body = child(stmt.body)
++            val handler = stmt.handler?.let { child(it, guards + RootArgument) }
++            val finalizer = stmt.finalizer?.let { child(it) }
++            return DiscoveryFlow(body.guards + handler?.guards.orEmpty() + finalizer?.guards.orEmpty(), finalizer?.exits == true || body.exits && (handler == null || handler.exits))
++        }
++        is SwitchStmt -> {
++            expr(stmt.expr)
++            val flows = stmt.cases.map { (key, body) -> key?.let { expr(it) }; child(Block(body), guards + stmt.expr) }
++            val tail = if (flows.any { it.exits || it.guards.isNotEmpty() }) listOf(stmt.expr) + flows.flatMap { it.guards } else emptyList()
++            return DiscoveryFlow(tail, stmt.cases.any { it.first == null } && flows.all { it.exits })
++        }
++        else -> Unit
++    }
++    return DiscoveryFlow()
++}
++private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<String>, guards: List<Expr>, visit: (Call, List<Expr>) -> Unit) {
++    if (guards.size > 128) unsupported("n control-flow limit exceeded")
++    fun child(expr: Expr, path: List<Expr> = guards) { walkExpression(expr, runtime, env, dynamic, path, visit) }
++    when (e) {
++        is Call -> { visit(e, guards); child(e.fn); e.args.forEach { child(it) } }
++        is Unary -> child(e.expr)
++        is Binary -> {
++            child(e.left)
++            val logical = e.op == "&&" || e.op == "||"
++            val known = if (logical) knownTruth(e.left, runtime, env, dynamic) else null
++            if (!(e.op == "&&" && known == false || e.op == "||" && known == true)) child(e.right, if (logical && known == null) guards + e.left else guards)
++        }
++        is Conditional -> {
++            child(e.test)
++            val known = knownTruth(e.test, runtime, env, dynamic)
++            val path = if (known == null) guards + e.test else guards
++            if (known != false) child(e.yes, path)
++            if (known != true) child(e.no, path)
++        }
++        is Member -> { child(e.target); child(e.key) }
++        is Update -> child(e.target)
++        is ArrayExpr -> e.items.forEach { child(it) }
++        is ObjectExpr -> e.items.forEach { child(it.second) }
++        // Nested function bodies have their own parameters and are not discovery roots.
++        else -> Unit
++    }
++}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..f0becd69e68e86b75f86e06a359a7d6e83da2e01
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Runtime.kt
+@@ -0,0 +1,476 @@
++package meow.nyx.quackjs
++
++import kotlin.math.abs
++import kotlin.math.ceil
++import kotlin.math.floor
++import kotlin.math.pow
++
++internal data object Undefined
++internal data object Hole
++internal class JsObject(val fields: MutableMap<String, Any?> = mutableMapOf(), val builtin: String? = null)
++internal class JsArray(val values: MutableList<Any?>, val fields: MutableMap<String, Any?> = mutableMapOf())
++internal class JsFunction(val code: FunctionExpr, val env: Env)
++internal class Native(val fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val invoke: (Runtime, Any?, List<Any?>) -> Any?)
++internal class JsDate(val time: Double)
++internal class JsThrown(val value: Any?) : Exception()
++private class Returned(val value: Any?) : Exception()
++private class Jumped(val jump: Jump) : Exception()
++private class Reference(val read: () -> Any?, val write: (Any?) -> Unit)
++internal class Env(val parent: Env? = null) {
++    val values = mutableMapOf<String, Any?>()
++    fun owner(name: String): Env? = if (values.containsKey(name)) this else parent?.owner(name)
++}
++
++internal class Runtime(val source: SourceIndex, parsed: Map<String, Expr> = emptyMap()) {
++    val definitions = parsed.toMutableMap()
++    private val global = Env()
++    private val resolving = mutableSetOf<String>()
++    private var steps = 0
++    private var allocated = 0
++    private var calls = 0
++    var challenge: String? = null
++    private var handlers = 0
++    private var expressionDepth = 0
++    fun tick(cost: Int = 1) { steps += cost; if (steps > 2_000_000) unsupported("Execution step limit exceeded") }
++    fun allocate(size: Int) {
++        if (size < 0 || size > 65_536) unsupported("Value size limit exceeded")
++        allocated += size + 1
++        if (allocated > 2_000_000) unsupported("Allocation limit exceeded")
++    }
++    fun array(items: List<Any?>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
++    fun string(value: String): String { allocate(value.length); return value }
++    fun resolve(name: String): Any? {
++        global.values[name]?.let { return it }
++        if (global.values.containsKey(name)) return global.values[name]
++        val builtin = builtin(name)
++        if (builtin !== Missing) { global.values[name] = builtin; return builtin }
++        if (!resolving.add(name)) unsupported("Circular initializer '$name'")
++        if (resolving.size > 64 || definitions.size > 512) unsupported("Dependency limit exceeded")
++        try {
++            val expr = definitions.getOrPut(name) { source.definition(name) }
++            val value = eval(expr, global)
++            global.values[name] = value
++            return value
++        } finally { resolving.remove(name) }
++    }
++    fun eval(expr: Expr, env: Env): Any? {
++        tick()
++        if (++expressionDepth > 256) unsupported("Expression execution depth limit exceeded")
++        try { return when (expr) {
++            is Lit -> expr.value
++            is Id -> env.owner(expr.name)?.values?.get(expr.name) ?: if (env.owner(expr.name) != null) null else resolve(expr.name)
++            is Unary -> when (expr.op) {
++                "typeof" -> {
++                    val value = if (expr.expr is Id && env.owner(expr.expr.name) == null && !source.hasDefinition(expr.expr.name) && builtin(expr.expr.name) === Missing) Undefined else eval(expr.expr, env)
++                    when (value) { Undefined -> "undefined"; null -> "object"; is String -> "string"; is Double, is Int -> "number"; is Boolean -> "boolean"; is JsFunction, is Native -> "function"; else -> "object" }
++                }
++                "delete" -> {
++                    val target = expr.expr as? Member ?: unsupported("Unsupported delete target")
++                    val obj = eval(target.target, env); val key = text(eval(target.key, env))
++                    when (obj) {
++                        is JsObject -> obj.fields.remove(key)
++                        is JsArray -> { val i = index(key); if (i != null && i < obj.values.size) obj.values[i] = Hole else obj.fields.remove(key) }
++                        else -> unsupported("Unsupported delete target")
++                    }; true
++                }
++                "void" -> { eval(expr.expr, env); Undefined }
++                "!" -> !truth(eval(expr.expr, env))
++                "~" -> int(eval(expr.expr, env)).inv().toDouble()
++                "+" -> number(eval(expr.expr, env))
++                "-" -> -number(eval(expr.expr, env))
++                else -> unsupported("Unsupported unary operator ${expr.op}")
++            }
++            is Binary -> {
++                when (expr.op) {
++                    "=" -> { val ref = reference(expr.left, env); val value = eval(expr.right, env); ref.write(value); value }
++                    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=" -> {
++                        val ref = reference(expr.left, env)
++                        val value = binary(expr.op.dropLast(1), ref.read(), eval(expr.right, env))
++                        ref.write(value); value
++                    }
++                    "&&" -> eval(expr.left, env).let { if (truth(it)) eval(expr.right, env) else it }
++                    "||" -> eval(expr.left, env).let { if (truth(it)) it else eval(expr.right, env) }
++                    "??" -> eval(expr.left, env).let { if (it == null || it === Undefined) eval(expr.right, env) else it }
++                    "," -> { eval(expr.left, env); eval(expr.right, env) }
++                    else -> binary(expr.op, eval(expr.left, env), eval(expr.right, env))
++                }
++            }
++            is Conditional -> eval(if (truth(eval(expr.test, env))) expr.yes else expr.no, env)
++            is Member -> get(eval(expr.target, env), text(eval(expr.key, env)))
++            is Call -> {
++                var self: Any? = Undefined
++                val fn = if (expr.fn is Member) {
++                    self = eval(expr.fn.target, env)
++                    val key = text(eval(expr.fn.key, env))
++                    val method = get(self, key)
++                    if (method === Undefined && (self is String || self is JsArray || self is Native) && identifierProperty(key) && key !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '$key'")
++                    method
++                } else eval(expr.fn, env)
++                val args = expr.args.map { eval(it, env) }
++                if (expr.construct) {
++                    if (fn !is Native) unsupported("Only built-in transform constructors are supported")
++                    invoke(fn, Undefined, args, construct = true)
++                } else invoke(fn, self, args)
++            }
++            is Update -> {
++                val ref = reference(expr.target, env)
++                val old = number(ref.read()); val value = old + if (expr.op == "++") 1 else -1
++                ref.write(value); if (expr.prefix) value else old
++            }
++            is ArrayExpr -> array(expr.items.map { eval(it, env) })
++            is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
++            is FunctionExpr -> { allocate(1); JsFunction(expr, env) }
++        } } finally { expressionDepth-- }
++    }
++    fun expression(expr: Expr, values: Map<String, Any?> = emptyMap()): Any? = eval(expr, Env(global).also { it.values.putAll(values) })
++    fun functionEnv(fn: JsFunction, self: Any?, args: List<Any?>): Env {
++        val env = Env(fn.env)
++        env.values["this"] = self
++        fn.code.params.forEachIndexed { i, name -> env.values[name] = args.getOrElse(i) { Undefined } }
++        env.values["arguments"] = array(args)
++        fn.code.name?.let { env.values[it] = fn }
++        hoist(fn.code.body, env)
++        return env
++    }
++    fun invoke(fn: Any?, self: Any?, args: List<Any?>, construct: Boolean = false): Any? {
++        tick()
++        if (++calls > 64) unsupported("Call depth limit exceeded")
++        try {
++            return when (fn) {
++                is Native -> {
++                    if (construct && !fn.constructible || !construct && !fn.callable) unsupported("Unsupported built-in constructor/call")
++                    fn.invoke(this, self, args)
++                }
++                is JsFunction -> {
++                    val env = functionEnv(fn, self, args)
++                    try { exec(fn.code.body, env); Undefined } catch (r: Returned) { r.value }
++                    catch (_: Jumped) { unsupported("Invalid or unsupported jump from transform function") }
++                }
++                else -> throw JsThrown("Value is not callable")
++            }
++        } finally { calls-- }
++    }
++    private fun hoist(stmt: Stmt, env: Env) {
++        when (stmt) {
++            is Vars -> stmt.items.forEach { if (!env.values.containsKey(it.first)) env.values[it.first] = Undefined }
++            is Block -> stmt.statements.forEach { hoist(it, env) }
++            is IfStmt -> { hoist(stmt.yes, env); stmt.no?.let { hoist(it, env) } }
++            is Loop -> { stmt.init?.let { hoist(it, env) }; hoist(stmt.body, env) }
++            is Label -> hoist(stmt.body, env)
++            is TryStmt -> { hoist(stmt.body, env); stmt.handler?.let { hoist(it, env) }; stmt.finalizer?.let { hoist(it, env) } }
++            is SwitchStmt -> stmt.cases.forEach { it.second.forEach { child -> hoist(child, env) } }
++            else -> Unit
++        }
++    }
++    fun exec(stmt: Stmt, env: Env) {
++        tick()
++        when (stmt) {
++            is Block -> stmt.statements.forEach { exec(it, env) }
++            is ExpressionStmt -> { eval(stmt.expr, env) }
++            is Vars -> stmt.items.forEach { (name, expr) -> if (expr != null) (env.owner(name) ?: env).values[name] = eval(expr, env) }
++            is IfStmt -> if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) }
++            is ReturnStmt -> throw Returned(if (stmt.expr == null) Undefined else eval(stmt.expr, env))
++            is ThrowStmt -> throw JsThrown(eval(stmt.expr, env))
++            is Loop -> {
++                stmt.init?.let { exec(it, env) }
++                var first = true
++                while (stmt.doFirst && first || stmt.test == null || truth(eval(stmt.test, env))) {
++                    tick(); first = false
++                    try { exec(stmt.body, env) } catch (jump: Jumped) {
++                        if (jump.jump.label != null) throw jump
++                        if (!jump.jump.isContinue) break
++                    }
++                    stmt.update?.let { eval(it, env) }
++                }
++            }
++            is Jump -> { if (stmt.isContinue && stmt.label != null) unsupported("Labeled continue is unsupported"); throw Jumped(stmt) }
++            is Label -> try { exec(stmt.body, env) } catch (jump: Jumped) {
++                if (jump.jump.label != stmt.name || jump.jump.isContinue) throw jump
++            }
++            is TryStmt -> {
++                // Unsupported syntax and resource failures are deliberately not JavaScript exceptions.
++                var pending: Exception? = null
++                try {
++                    try { exec(stmt.body, env) } catch (error: JsThrown) {
++                        if (stmt.handler == null) throw error
++                        val catchEnv = Env(env); catchEnv.values[stmt.catchName!!] = error.value
++                        handlers++
++                        try { exec(stmt.handler, catchEnv) } finally { handlers-- }
++                    }
++                } catch (error: JsThrown) { pending = error }
++                catch (returned: Returned) { pending = returned }
++                catch (jumped: Jumped) { pending = jumped }
++                stmt.finalizer?.let { exec(it, env) }
++                if (pending != null) throw pending
++            }
++            is SwitchStmt -> {
++                val value = eval(stmt.expr, env)
++                var start = stmt.cases.indexOfFirst { it.first != null && equal(value, eval(it.first!!, env), true) }
++                if (start < 0) start = stmt.cases.indexOfFirst { it.first == null }
++                if (start >= 0) try {
++                    for (i in start until stmt.cases.size) stmt.cases[i].second.forEach { exec(it, env) }
++                } catch (jump: Jumped) { if (jump.jump.isContinue || jump.jump.label != null) throw jump }
++            }
++            EmptyStmt -> Unit
++        }
++    }
++    private fun reference(expr: Expr, env: Env): Reference = when (expr) {
++        is Id -> {
++            val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
++            Reference({ owner.values[expr.name] }, { value -> owner.values[expr.name] = value })
++        }
++        is Member -> {
++            val obj = eval(expr.target, env); val key = text(eval(expr.key, env))
++            Reference({ get(obj, key) }, { value -> set(obj, key, value) })
++        }
++        else -> unsupported("Invalid assignment target")
++    }
++    fun set(obj: Any?, key: String, value: Any?) {
++        when (obj) {
++            is JsObject -> { if (!obj.fields.containsKey(key)) allocate(1); obj.fields[key] = value }
++            is JsArray -> {
++                if (key == "length") {
++                    val length = number(value)
++                    if (length < 0 || length != floor(length)) throw JsThrown("Invalid array length")
++                    if (length > 65_536) unsupported("Array size limit exceeded")
++                    val size = length.toInt()
++                    if (size > obj.values.size) { allocate(size - obj.values.size); repeat(size - obj.values.size) { obj.values.add(Hole) } }
++                    else while (obj.values.size > size) obj.values.removeAt(obj.values.lastIndex)
++                } else {
++                    val numeric = key.toLongOrNull()
++                    if (numeric != null && numeric in 65_536L..4_294_967_294L && key == numeric.toString()) unsupported("Array index limit exceeded")
++                    val i = index(key)
++                    if (i == null) { if (!obj.fields.containsKey(key)) allocate(1); obj.fields[key] = value }
++                    else {
++                        if (i >= 65_536) unsupported("Array index limit exceeded")
++                        if (i >= obj.values.size) { allocate(i + 1 - obj.values.size); repeat(i + 1 - obj.values.size) { obj.values.add(Hole) } }
++                        obj.values[i] = value
++                    }
++                }
++            }
++            null, Undefined -> throw JsThrown("Cannot set property on null/undefined")
++            else -> unsupported("Unsupported property assignment")
++        }
++    }
++    fun get(obj: Any?, key: String): Any? {
++        tick()
++        if (obj == null || obj === Undefined) throw JsThrown("Cannot read '$key' on null/undefined")
++        if ((obj is JsFunction || obj is Native) && key == "call") return Native { r, _, a -> r.invoke(obj, a.firstOrNull() ?: Undefined, a.drop(1)) }
++        if ((obj is JsFunction || obj is Native) && key == "apply") return Native { r, _, a ->
++            val args = a.getOrNull(1)
++            r.invoke(obj, a.firstOrNull() ?: Undefined, if (args == null || args === Undefined) emptyList() else (args as? JsArray)?.values?.toList() ?: throw JsThrown("Invalid apply arguments"))
++        }
++        if (obj is Native) return if (obj.fields.containsKey(key)) obj.fields[key] else unsupported("Unsupported built-in property '$key'")
++        if (obj is JsFunction) return when (key) {
++            "length" -> obj.code.params.size.toDouble()
++            "name", "prototype", "constructor", "bind", "caller", "arguments", "toString", "valueOf" -> unsupported("Unsupported function property '$key'")
++            else -> Undefined
++        }
++        if (obj is JsObject) return obj.fields[key] ?: if (obj.fields.containsKey(key)) null else if (obj.builtin != null) unsupported("Unsupported ${obj.builtin}.$key") else Undefined
++        if (obj is JsArray) {
++            if (key == "length") return obj.values.size.toDouble()
++            index(key)?.let { return obj.values.getOrElse(it) { Undefined }.let { item -> if (item === Hole) Undefined else item } }
++            if (obj.fields.containsKey(key)) return obj.fields[key]
++            return arrayMethod(obj, key)
++        }
++        if (obj is String) {
++            if (key == "length") return obj.length.toDouble()
++            index(key)?.let { return if (it < obj.length) obj[it].toString() else Undefined }
++            return stringMethod(obj, key)
++        }
++        if (key == "toString" && (obj is Double || obj is Int || obj is Boolean)) return Native { _, _, a ->
++            if (a.isNotEmpty() && number(a[0]) != 10.0) unsupported("Unsupported number radix")
++            text(obj)
++        }
++        // Regexes may be opaque constants, but must never silently execute with Kotlin regex semantics.
++        if (obj is RegexValue) unsupported("Unsupported regex operation '$key'")
++        return Undefined
++    }
++    private fun arrayMethod(arr: JsArray, name: String): Any? {
++        val v = arr.values
++        return when (name) {
++            "reverse" -> Native { _, _, _ -> tick(v.size); v.reverse(); arr }
++            "join", "toString" -> Native { _, _, a ->
++                val sep = if (name == "toString" || a.isEmpty() || a[0] === Undefined) "," else text(a[0])
++                val size = v.sumOf { if (it == null || it === Undefined || it === Hole) 0L else text(it).length.toLong() } + (v.size - 1).coerceAtLeast(0).toLong() * sep.length
++                if (size > 65_536) unsupported("String size limit exceeded")
++                string(v.joinToString(sep) { if (it == null || it === Undefined || it === Hole) "" else text(it) })
++            }
++            "push" -> Native { _, _, a -> allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); v.size.toDouble() }
++            "unshift" -> Native { _, _, a -> allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(0, a); v.size.toDouble() }
++            "pop" -> Native { _, _, _ -> if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
++            "shift" -> Native { _, _, _ -> if (v.isEmpty()) Undefined else { tick(v.size); v.removeAt(0).let { if (it === Hole) Undefined else it } } }
++            "slice" -> Native { _, _, a -> val start = relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else relative(a[1], v.size); array(v.subList(start, end.coerceAtLeast(start))) }
++            "splice" -> Native { _, _, a ->
++                val start = relative(a.getOrElse(0) { 0.0 }, v.size)
++                val count = if (a.isEmpty()) 0 else if (a.size < 2) v.size - start else integer(a[1]).coerceIn(0, v.size - start)
++                val added = a.drop(2)
++                if (v.size - count + added.size > 65_536) unsupported("Array size limit exceeded")
++                val removed = array(v.subList(start, start + count)); allocate(added.size); tick(v.size)
++                v.subList(start, start + count).clear(); v.addAll(start, added); removed
++            }
++            "forEach" -> Native { r, _, a ->
++                val length = v.size
++                for (i in 0 until length) { tick(); if (i < v.size && v[i] !== Hole) r.invoke(a.getOrElse(0) { Undefined }, a.getOrElse(1) { Undefined }, listOf(v[i], i.toDouble(), arr)) }
++                Undefined
++            }
++            "indexOf" -> Native { _, _, a -> val start = relative(a.getOrElse(1) { 0.0 }, v.size); var result = -1; for (i in start until v.size) { tick(); if (v[i] !== Hole && equal(v[i], a.getOrElse(0) { Undefined }, true)) { result = i; break } }; result.toDouble() }
++            else -> Undefined
++        }
++    }
++    private fun stringMethod(value: String, name: String): Any? = when (name) {
++        "split" -> Native { _, _, a ->
++            if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
++            val limit = if (a.size < 2 || a[1] === Undefined) 4_294_967_295L else uint(a[1])
++            val sep = a.firstOrNull()
++            val parts = mutableListOf<Any?>()
++            fun addPart(start: Int, end: Int) {
++                tick()
++                if (parts.size >= 65_536) unsupported("Array size limit exceeded")
++                if (start == 0 && end == value.length) parts.add(value)
++                else { allocate(end - start); parts.add(value.substring(start, end)) }
++            }
++            if (limit > 0) {
++                if (a.isEmpty() || sep === Undefined) addPart(0, value.length)
++                else {
++                    val separator = text(sep)
++                    var start = 0
++                    if (separator.isEmpty()) {
++                        while (start < value.length && parts.size.toLong() < limit) { addPart(start, start + 1); start++ }
++                    } else while (parts.size.toLong() < limit) {
++                        val end = value.indexOf(separator, start)
++                        if (end < 0) { addPart(start, value.length); break }
++                        addPart(start, end)
++                        start = end + separator.length
++                    }
++                }
++            }
++            array(parts)
++        }
++        "slice", "substring", "substr" -> Native { _, _, a ->
++            val rawStart = a.getOrElse(0) { 0.0 }
++            var start = if (name == "substring") integer(rawStart).coerceIn(0, value.length) else relative(rawStart, value.length)
++            var end = if (a.size < 2 || a[1] === Undefined) value.length else if (name == "slice") relative(a[1], value.length) else if (name == "substr") (start.toLong() + integer(a[1]).coerceAtLeast(0)).coerceAtMost(value.length.toLong()).toInt() else integer(a[1]).coerceIn(0, value.length)
++            if (name == "substring" && start > end) { val temp = start; start = end; end = temp }
++            string(value.substring(start, end.coerceAtLeast(start)))
++        }
++        "charCodeAt", "charAt" -> Native { _, _, a -> val i = integer(a.getOrElse(0) { 0.0 }); if (i !in value.indices) if (name == "charAt") "" else Double.NaN else if (name == "charAt") value[i].toString() else value[i].code.toDouble() }
++        "indexOf", "lastIndexOf" -> Native { _, _, a ->
++            val search = text(a.getOrElse(0) { Undefined }); val from = if (a.size < 2 || a[1] === Undefined || name == "lastIndexOf" && number(a[1]).isNaN()) if (name == "indexOf") 0 else value.length else integer(a[1]).coerceIn(0, value.length)
++            if (name == "indexOf") value.indexOf(search, from).toDouble() else value.lastIndexOf(search, from).toDouble()
++        }
++        "startsWith", "endsWith", "includes" -> Native { _, _, a ->
++            if (a.firstOrNull() is RegexValue) throw JsThrown("Regex argument")
++            val search = text(a.getOrElse(0) { Undefined }); val pos = if (a.size < 2 || a[1] === Undefined) if (name == "endsWith") value.length else 0 else integer(a[1]).coerceIn(0, value.length)
++            when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> value.indexOf(search, pos) >= 0 }
++        }
++        "toString", "valueOf" -> Native { _, _, _ -> value }
++        else -> Undefined
++    }
++    private fun binary(op: String, left: Any?, right: Any?): Any? = when (op) {
++        "+" -> { val a = primitive(left); val b = primitive(right); if (a is String || b is String) { val x = text(a); val y = text(b); if (handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else number(a) + number(b) }
++        "-" -> number(left) - number(right); "*" -> number(left) * number(right); "/" -> number(left) / number(right); "%" -> number(left) % number(right); "**" -> number(left).pow(number(right))
++        "^" -> (int(left) xor int(right)).toDouble(); "&" -> (int(left) and int(right)).toDouble(); "|" -> (int(left) or int(right)).toDouble()
++        "<<" -> (int(left) shl (int(right) and 31)).toDouble(); ">>" -> (int(left) shr (int(right) and 31)).toDouble(); ">>>" -> (int(left).toUInt() shr (int(right) and 31)).toDouble()
++        "==" -> equal(left, right, false); "!=" -> !equal(left, right, false); "===" -> equal(left, right, true); "!==" -> !equal(left, right, true)
++        "<", ">", "<=", ">=" -> {
++            val a = primitive(left); val b = primitive(right)
++            if (a is String && b is String) when (op) { "<" -> a < b; ">" -> a > b; "<=" -> a <= b; else -> a >= b }
++            else { val x = number(a); val y = number(b); when (op) { "<" -> x < y; ">" -> x > y; "<=" -> x <= y; else -> x >= y } }
++        }
++        "in" -> { val key = text(left); when (right) { is JsObject -> right.fields.containsKey(key); is JsArray -> index(key)?.let { it < right.values.size && right.values[it] !== Hole } ?: right.fields.containsKey(key); else -> throw JsThrown("Invalid right-hand side of in") } }
++        else -> unsupported("Unsupported operator '$op'")
++    }
++    private fun builtin(name: String): Any? = when (name) {
++        "undefined" -> Undefined; "NaN" -> Double.NaN; "Infinity" -> Double.POSITIVE_INFINITY
++        "String" -> stringConstructor
++        "Number" -> numberConstructor
++        "Date" -> Native(constructible = true, callable = false) { _, _, a -> JsDate(if (a.firstOrNull() is String) parseDate(a[0] as String) else unsupported("Only constant ISO dates are supported")) }
++        "Math" -> math
++        "Array" -> Native(mapOf("isArray" to Native { _, _, a -> a.firstOrNull() is JsArray }), constructible = true) { r, _, a -> if (a.size == 1 && a[0] is Double) { val n = number(a[0]); if (n != floor(n) || n < 0 || n > 65_536) unsupported("Array size limit exceeded"); r.allocate(n.toInt()); JsArray(MutableList(n.toInt()) { Hole }) } else r.array(a) }
++        "Error", "TypeError", "RangeError" -> Native(constructible = true) { _, _, a -> JsObject(mutableMapOf("name" to name, "message" to if (a.isEmpty() || a[0] === Undefined) "" else text(a[0]))) }
++        "Object" -> objectConstructor
++        else -> Missing
++    }
++    private val stringConstructor get() = Native(mapOf(
++        "fromCharCode" to Native { r, _, a -> r.string(a.map { (int(it) and 65535).toChar() }.joinToString("")) }
++    )) { r, _, a -> r.string(if (a.isEmpty()) "" else text(a[0])) }
++    private val numberConstructor get() = Native(mapOf(
++        "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
++        "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
++    )) { _, _, a -> if (a.isEmpty()) 0.0 else number(a[0]) }
++    private val objectConstructor get() = Native(mapOf(
++        "assign" to Native { r, _, a -> val target = a.firstOrNull() as? JsObject ?: unsupported("Unsupported Object.assign target"); a.drop(1).forEach { obj -> if (obj is JsObject) obj.fields.forEach { (k, v) -> r.set(target, k, v) } else if (obj != null && obj !== Undefined) unsupported("Unsupported Object.assign source") }; target }
++    ), constructible = true) { _, _, a ->
++        val value = a.firstOrNull()
++        if (value == null || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
++    }
++    private val math get() = JsObject(mutableMapOf(
++        "floor" to Native { _, _, a -> floor(number(a.firstOrNull() ?: Undefined)) },
++        "ceil" to Native { _, _, a -> ceil(number(a.firstOrNull() ?: Undefined)) },
++        "abs" to Native { _, _, a -> abs(number(a.firstOrNull() ?: Undefined)) },
++        "trunc" to Native { _, _, a -> val n = number(a.firstOrNull() ?: Undefined); if (n < 0) ceil(n) else floor(n) },
++        "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
++        "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY }
++    ), "Math")
++    private data object Missing
++}
++
++private fun identifierProperty(name: String): Boolean = SourceIndex.identifier.matches(name)
++
++internal fun truth(value: Any?): Boolean = when (value) { null, Undefined, Hole -> false; is Boolean -> value; is Double -> value != 0.0 && !value.isNaN(); is Int -> value != 0; is String -> value.isNotEmpty(); else -> true }
++internal fun primitive(value: Any?): Any? = when (value) { is JsDate -> value.time; is JsArray -> unsupported("Implicit array coercion is unsupported"); is JsObject -> unsupported("Implicit object coercion is unsupported"); else -> value }
++internal fun number(value: Any?): Double = when (val v = primitive(value)) { null -> 0.0; Undefined, Hole -> Double.NaN; is Double -> v; is Int -> v.toDouble(); is Boolean -> if (v) 1.0 else 0.0; is String -> numericString(v); else -> Double.NaN }
++private fun numericString(value: String): Double {
++    val s = value.trim()
++    if (s.isEmpty()) return 0.0
++    if (s == "Infinity" || s == "+Infinity") return Double.POSITIVE_INFINITY
++    if (s == "-Infinity") return Double.NEGATIVE_INFINITY
++    val radix = when { s.startsWith("0x", true) -> 16; s.startsWith("0b", true) -> 2; s.startsWith("0o", true) -> 8; else -> 0 }
++    if (radix != 0) {
++        if (s.length == 2) return Double.NaN
++        var n = 0.0
++        for (c in s.drop(2)) { val digit = c.digitToIntOrNull(radix) ?: return Double.NaN; n = n * radix + digit }
++        return n
++    }
++    if (!Regex("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").matches(s)) return Double.NaN
++    return s.toDoubleOrNull() ?: Double.NaN
++}
++internal fun int(value: Any?): Int { val n = number(value); if (!n.isFinite() || n == 0.0) return 0; val t = if (n < 0) ceil(n) else floor(n); return (t % 4294967296.0).toLong().toInt() }
++internal fun uint(value: Any?): Long = int(value).toUInt().toLong()
++internal fun integer(value: Any?): Int { val n = number(value); return when { n.isNaN() -> 0; n >= Int.MAX_VALUE -> Int.MAX_VALUE; n <= Int.MIN_VALUE -> Int.MIN_VALUE; else -> n.toInt() } }
++internal fun relative(value: Any?, length: Int): Int { val n = integer(value); return if (n < 0) (length.toLong() + n).coerceAtLeast(0).toInt() else n.coerceAtMost(length) }
++internal fun index(key: String): Int? { if (key.isEmpty() || key.length > 10 || key.length > 1 && key[0] == '0' || key.any { it !in '0'..'9' }) return null; return key.toIntOrNull()?.takeIf { it >= 0 } }
++internal fun text(value: Any?): String = when (value) {
++    null -> "null"; Undefined -> "undefined"; is String -> value; is Boolean -> value.toString(); is Int -> value.toString()
++    is Double -> when { value.isNaN() -> "NaN"; value == Double.POSITIVE_INFINITY -> "Infinity"; value == Double.NEGATIVE_INFINITY -> "-Infinity"; value == 0.0 -> "0"; abs(value) <= 9007199254740991.0 && value == floor(value) -> value.toLong().toString(); else -> unsupported("Non-integer number string coercion is unsupported") }
++    is RegexValue -> value.source
++    else -> unsupported("Unsupported string coercion")
++}
++internal fun equal(a: Any?, b: Any?, strict: Boolean): Boolean {
++    if (a === b) return a !is Double || !a.isNaN()
++    if (a is Double && b is Double) return a == b
++    if (a is String && b is String) return a == b
++    if (a is Boolean && b is Boolean) return a == b
++    if (!strict) {
++        if ((a == null || a === Undefined) && (b == null || b === Undefined)) return true
++        if (a is Boolean || b is Boolean || a is Double && b is String || a is String && b is Double) return number(a) == number(b)
++        if (a is JsDate || b is JsDate) return number(a) == number(b)
++    }
++    return false
++}
++
++private fun parseDate(value: String): Double {
++    val match = Regex("^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.(\\d{3}))?(Z|[+-]\\d{2}:\\d{2})$").matchEntire(value) ?: unsupported("Unsupported date literal")
++    val p = match.groupValues
++    val year = p[1].toInt(); val month = p[2].toInt(); val day = p[3].toInt()
++    if (year !in 1900..2100 || month !in 1..12 || day !in 1..31 || p[4].toInt() > 23 || p[5].toInt() > 59 || p[6].toInt() > 59) unsupported("Invalid date literal")
++    fun daysBefore(y: Int): Int { val n = y - 1; return 365 * n + n / 4 - n / 100 + n / 400 }
++    val months = intArrayOf(31, if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
++    var days = daysBefore(year) - daysBefore(1970) + day - 1
++    for (m in 1 until month) days += months[m - 1]
++    val zone = p[8]
++    if (zone != "Z" && (zone.substring(1, 3).toInt() > 23 || zone.substring(4, 6).toInt() > 59)) unsupported("Invalid date offset")
++    val offset = if (zone == "Z") 0 else (zone.substring(1, 3).toInt() * 60 + zone.substring(4, 6).toInt()) * if (zone[0] == '-') -1 else 1
++    return days * 86400000.0 + p[4].toInt() * 3600000.0 + (p[5].toInt() - offset) * 60000.0 + p[6].toInt() * 1000.0 + (p[7].toIntOrNull() ?: 0)
++}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a2d35c29900e2e025ac9323253dc7dc6fc41f9b
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/SourceIndex.kt
+@@ -0,0 +1,219 @@
++package meow.nyx.quackjs
++
++/** Lex once to index the player scope; parse and execute only selected dependencies. */
++internal class SourceIndex(val source: String, className: String) {
++    private data class Assignment(val lhs: List<Token>, val offset: Int, val braces: Int, val parens: Int)
++    private val assignments: List<Assignment>
++    private val rootBraces: Int
++    private val rootParens: Int
++    private val names: Map<String, List<Assignment>>
++    private val mutatedObjects: Set<String>
++    private val writeCounts: Map<String, Int>
++    private val timestamps: Set<Int>
++    val signatureTimestamp: Int? get() = if (timestamps.size <= 1) timestamps.singleOrNull() else unsupported("Conflicting signature timestamps")
++
++    init {
++        if (source.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
++        if (className.length > 128 || !identifier.matches(className)) unsupported("Invalid n class hint")
++        val lexer = Lexer(source)
++        val recent = ArrayDeque<Token>()
++        val found = mutableListOf<Assignment>()
++        val methodCalls = mutableListOf<Triple<String, Int, Int>>()
++        val updates = mutableListOf<Triple<String, Int, Boolean>>()
++        val stamps = mutableSetOf<Int>()
++        var pendingStamp: Int? = null
++        var braces = 0
++        var parens = 0
++        var count = 0
++        var previous: String? = null
++        var prefixUpdate = false
++        fun recordUpdate(name: String, member: Boolean) {
++            if (updates.size >= 100_000) unsupported("Source mutation limit exceeded")
++            updates.add(Triple(name, braces, member))
++        }
++        while (true) {
++            val token = lexer.next(previous)
++            if (token.kind == -1) break
++            if (++count > 2_000_000) unsupported("Source token limit exceeded")
++            if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
++            pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
++            if (prefixUpdate) {
++                if (token.kind == 0 && identifier.matches(token.text)) {
++                    val next = Lexer(source, token.offset + token.text.length).next(token.context)
++                    recordUpdate(token.text, next.kind == 0 && next.text in listOf(".", "["))
++                    prefixUpdate = false
++                }
++                else if (token.kind != 0 || token.text != "(") prefixUpdate = false
++            }
++            if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
++                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" }, call = true)
++                if (lhs != null) recordUpdate(lhs.first().text, lhs.size > 1)
++                prefixUpdate = token.text == "++" || token.text == "--"
++            }
++            if (token.kind == 0 && token.text == "=") {
++                val lhs = assignmentTarget(recent.toList().dropLastWhile { it.kind == 0 && it.text == ")" })
++                if (lhs != null) {
++                    if (found.size >= 100_000) unsupported("Source definition limit exceeded")
++                    found.add(Assignment(lhs, token.offset + 1, braces, parens))
++                }
++            }
++            if (token.kind == 0 && token.text == "(") {
++                val target = assignmentTarget(recent.toList(), call = true)
++                if (target != null && target.size > 1) {
++                    if (methodCalls.size >= 100_000) unsupported("Source call limit exceeded")
++                    methodCalls.add(Triple(target.first().text, braces, parens))
++                }
++            }
++            if (token.kind == 0) when (token.text) {
++                "{" -> braces++
++                "}" -> braces--
++                "(" -> parens++
++                ")" -> parens--
++            }
++            if (braces < 0 || parens < 0 || braces > 512 || parens > 512) unsupported("Source nesting limit exceeded")
++            if (recent.size == 96) recent.removeFirst()
++            recent.addLast(token)
++            previous = token.context
++        }
++        if (braces != 0 || parens != 0) unsupported("Unbalanced player source")
++        val classes = found.filter { it.lhs.map(Token::text) == listOf("g", ".", className) }
++        val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$className'")
++        val classAssignments = classes.filter { it.braces == depth }
++        if (classAssignments.size != 1) unsupported("Ambiguous n class '$className'")
++        rootBraces = classAssignments.single().braces
++        rootParens = classAssignments.single().parens
++        assignments = found.filter { it.braces == rootBraces && it.parens == rootParens }
++        names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
++        val writes = found.filter { it.braces == rootBraces }
++        writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
++        val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).toMutableSet()
++        val aliases = mutableMapOf<String, MutableSet<String>>()
++        for (write in writes) {
++            if (write.lhs.size != 1) continue
++            val target = referenceBase(write.offset) ?: continue
++            val alias = write.lhs.single().text
++            aliases.getOrPut(alias) { mutableSetOf() }.add(target)
++            aliases.getOrPut(target) { mutableSetOf() }.add(alias)
++        }
++        val queue = ArrayDeque(sharedMutations)
++        while (queue.isNotEmpty()) {
++            for (alias in aliases[queue.removeFirst()].orEmpty()) if (sharedMutations.add(alias)) queue.addLast(alias)
++        }
++        mutatedObjects = sharedMutations + updates.filter { it.second == rootBraces }.map { it.first }
++        timestamps = stamps
++    }
++
++    /** Link direct reference paths without evaluating unrelated initializers. */
++    private fun referenceBase(offset: Int): String? {
++        val lexer = Lexer(source, offset)
++        var previous: String? = null
++        var count = 0
++        fun next(): Token? {
++            if (++count > 1024) return null
++            return lexer.next(previous).also { previous = it.context }
++        }
++        var token = next() ?: return null
++        var groups = 0
++        while (token.kind == 0 && token.text == "(") { groups++; token = next() ?: return null }
++        if (token.kind != 0 || !identifier.matches(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
++        val base = token.text
++        token = next() ?: return base
++        while (token.kind == 0 && token.text in listOf(".", "[")) {
++            if (token.text == ".") {
++                token = next() ?: return base
++                if (token.kind != 0 || !identifier.matches(token.text)) return null
++            } else {
++                var depth = 1
++                while (depth > 0) {
++                    token = next() ?: return base
++                    if (token.kind == -1) return null
++                    if (token.kind == 0 && token.text == "[") depth++
++                    if (token.kind == 0 && token.text == "]") depth--
++                }
++            }
++            token = next() ?: return base
++        }
++        while (groups > 0) {
++            if (token.kind != 0 || token.text != ")") return null
++            groups--; token = next() ?: return base
++        }
++        return base.takeIf { token.kind == -1 || token.kind == 0 && token.text in listOf(";", ",", ")", "}") }
++    }
++
++    fun hasDefinition(name: String): Boolean = names.containsKey(name)
++
++    fun definition(name: String): Expr {
++        val entries = names[name] ?: unsupported("Missing dependency '$name'")
++        if (entries.size != 1) unsupported("Ambiguous dependency '$name'")
++        if (name in mutatedObjects || writeCounts[name] != 1) unsupported("Externally mutated dependency '$name'")
++        return parseAt(entries.single().offset)
++    }
++
++    fun parseAt(offset: Int): Expr = Parser(slice(offset)).completeExpression()
++
++    fun slice(offset: Int): List<Token> {
++        val lexer = Lexer(source, offset)
++        val tokens = mutableListOf<Token>()
++        var depth = 0
++        while (true) {
++            val token = lexer.next(tokens.lastOrNull()?.context)
++            if (token.kind == -1 || token.kind == 0 && depth == 0 && token.text in setOf(",", ";", ")", "}")) {
++                tokens.add(Token("<eof>", -1, token.offset)); return tokens
++            }
++            if (token.kind == 0) {
++                if (token.text == "(" || token.text == "[" || token.text == "{") depth++
++                if (token.text == ")" || token.text == "]" || token.text == "}") depth--
++            }
++            if (depth > 128) unsupported("Source nesting limit exceeded")
++            if (tokens.size >= 150_000) unsupported("Definition token limit exceeded")
++            tokens.add(token)
++        }
++    }
++
++    fun classFunction(name: String): FunctionExpr {
++        val entry = assignments.singleOrNull { it.lhs.map(Token::text) == listOf("g", ".", name) }
++            ?: unsupported("Missing or ambiguous n class '$name'")
++        return parseAt(entry.offset) as? FunctionExpr ?: unsupported("Unsupported n class")
++    }
++
++    fun method(name: String, methodName: String, runtime: Runtime): FunctionExpr {
++        val methods = mutableListOf<FunctionExpr>()
++        for (entry in assignments) {
++            if (entry.lhs.take(3).map(Token::text) != listOf("g", ".", name) || entry.lhs.size == 3) continue
++            val target = Parser(entry.lhs + Token("<eof>", -1)).completeExpression() as? Member ?: continue
++            val parent = target.target as? Member ?: continue
++            val root = parent.target as? Member ?: continue
++            if (root.target != Id("g") || root.key != Lit(name)) continue
++            if (runtime.expression(parent.key) == "prototype" && runtime.expression(target.key) == methodName) {
++                methods.add(parseAt(entry.offset) as? FunctionExpr ?: unsupported("Invalid n method"))
++            }
++        }
++        if (methods.size != 1) unsupported("Missing or ambiguous n $methodName method for '$name'")
++        return methods.single()
++    }
++
++    companion object {
++        val identifier = Regex("[A-Za-z_$][A-Za-z0-9_$]*")
++        private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
++        private fun assignmentTarget(tokens: List<Token>, call: Boolean = false): List<Token>? {
++            var start = tokens.lastIndex
++            if (start < 0) return null
++            var brackets = 0
++            while (start >= 0) {
++                val token = tokens[start]
++                if (token.kind != 0) { if (brackets == 0) return null; start--; continue }
++                if (token.text == "]") brackets++
++                if (token.text == "[") brackets--
++                if (brackets == 0 && token.text !in listOf(".", "[", "]")) {
++                    if (!identifier.matches(token.text)) return null
++                    if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
++                    val before = tokens.getOrNull(start - 1)?.text
++                    if (before != null && before !in listOf("var", "let", "const", ";", ",", "{", "}", "(") && !(call && before in listOf("=", "return", "new", "(", "?", ":"))) return null
++                    return tokens.subList(start, tokens.size).toList()
++                }
++                start--
++            }
++            return null
++        }
++    }
++}
+diff --git a/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..47d3968c4ff9ea6a7ed8f0f9bf081a4f03031d43
+--- /dev/null
++++ b/quackjs/src/commonMain/kotlin/meow/nyx/quackjs/Syntax.kt
+@@ -0,0 +1,338 @@
++package meow.nyx.quackjs
++
++internal fun unsupported(message: String): Nothing = throw UnsupportedPlayerException(message)
++
++internal data class Token(val text: String, val kind: Int = 0, val offset: Int = 0)
++internal val Token.context: String get() = if (kind == 0) text else "<value>"
++
++/** Lex only selected definitions. Strings and regexes stay opaque while slicing. */
++internal class Lexer(private val source: String, private var p: Int = 0) {
++    private var templateDepth = 0
++    fun tokens(): List<Token> {
++        val out = mutableListOf<Token>()
++        while (true) {
++            val t = next(out.lastOrNull()?.context)
++            out.add(t)
++            if (out.size > 150_000) unsupported("Transform definition exceeds token limit")
++            if (t.kind == -1) return out
++        }
++    }
++
++    fun next(previous: String? = null): Token {
++        while (p < source.length) {
++            if (source[p].isWhitespace()) { p++; continue }
++            if (source.startsWith("//", p)) {
++                while (p < source.length && source[p] != '\n') p++
++                continue
++            }
++            if (source.startsWith("/*", p)) {
++                val end = source.indexOf("*/", p + 2)
++                if (end < 0) unsupported("Unclosed comment")
++                p = end + 2; continue
++            }
++            break
++        }
++        val start = p
++        if (p == source.length) return Token("<eof>", -1, p)
++        val c = source[p++]
++        if (c == '`') {
++            if (++templateDepth > 64) unsupported("Template nesting limit exceeded")
++            try {
++                while (p < source.length) {
++                    val ch = source[p++]
++                    if (ch == '\\') { if (p < source.length) p++; continue }
++                    if (ch == '`') return Token(source.substring(start, p), 4, start)
++                    if (ch == '$' && p < source.length && source[p] == '{') {
++                        p++
++                        var braces = 1
++                        var prev: String? = null
++                        while (braces > 0) {
++                            val token = next(prev)
++                            if (token.kind == -1) unsupported("Unclosed template interpolation")
++                            if (token.kind == 0 && token.text == "{") braces++
++                            if (token.kind == 0 && token.text == "}") braces--
++                            prev = token.context
++                        }
++                    }
++                }
++                unsupported("Unclosed template literal")
++            } finally { templateDepth-- }
++        }
++        if (c == '\'' || c == '"') {
++            val result = StringBuilder()
++            while (p < source.length) {
++                var ch = source[p++]
++                if (ch == c) return Token(result.toString(), 1, start)
++                if (ch == '\\') {
++                    if (p == source.length) unsupported("Unclosed string escape")
++                    ch = source[p++]
++                    when (ch) {
++                        'n' -> result.append('\n'); 'r' -> result.append('\r'); 't' -> result.append('\t')
++                        'b' -> result.append('\b'); 'f' -> result.append('\u000c'); 'v' -> result.append('\u000b')
++                        '\n' -> Unit
++                        '\r' -> if (p < source.length && source[p] == '\n') p++
++                        'x', 'u' -> {
++                            val length = if (ch == 'x') 2 else 4
++                            if (p + length > source.length) unsupported("Invalid string escape")
++                            val n = source.substring(p, p + length).toIntOrNull(16) ?: unsupported("Invalid string escape")
++                            result.append(n.toChar()); p += length
++                        }
++                        '0' -> { if (p < source.length && source[p].isDigit()) unsupported("Legacy octal string escape"); result.append('\u0000') }
++                        in '1'..'7' -> unsupported("Legacy octal string escape")
++                        else -> result.append(ch)
++                    }
++                } else {
++                    if (ch == '\n' || ch == '\r') unsupported("Unclosed string")
++                    result.append(ch)
++                }
++            }
++            unsupported("Unclosed string")
++        }
++        if (c.isLetter() || c == '_' || c == '$') {
++            while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '_' || source[p] == '$')) p++
++            return Token(source.substring(start, p), 0, start)
++        }
++        if (c.isDigit() || c == '.' && p < source.length && source[p].isDigit()) {
++            while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '.' || (source[p] == '+' || source[p] == '-') && source[p - 1].lowercaseChar() == 'e')) p++
++            return Token(source.substring(start, p), 2, start)
++        }
++        if (c == '/' && (previous == null || previous in regexPrefix)) {
++            var bracket = false
++            while (p < source.length) {
++                val ch = source[p++]
++                if (ch == '\\') { p++; continue }
++                if (ch == '[') bracket = true
++                if (ch == ']') bracket = false
++                if (ch == '/' && !bracket) {
++                    while (p < source.length && source[p].isLetter()) p++
++                    return Token(source.substring(start, p), 3, start)
++                }
++                if (ch == '\n' || ch == '\r') unsupported("Unclosed regex")
++            }
++            unsupported("Unclosed regex")
++        }
++        for (op in operators) if (source.startsWith(op, start)) {
++            p = start + op.length; return Token(op, 0, start)
++        }
++        return Token(c.toString(), 0, start)
++    }
++
++    companion object {
++        private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
++        private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...")
++    }
++}
++
++internal sealed interface Expr
++internal data class Lit(val value: Any?) : Expr
++internal data class Id(val name: String) : Expr
++internal data class Unary(val op: String, val expr: Expr) : Expr
++internal data class Binary(val op: String, val left: Expr, val right: Expr) : Expr
++internal data class Conditional(val test: Expr, val yes: Expr, val no: Expr) : Expr
++internal data class Member(val target: Expr, val key: Expr) : Expr
++internal data class Call(val fn: Expr, val args: List<Expr>, val construct: Boolean = false) : Expr
++internal data class Update(val op: String, val target: Expr, val prefix: Boolean) : Expr
++internal data class ArrayExpr(val items: List<Expr>) : Expr
++internal data class ObjectExpr(val items: List<Pair<String, Expr>>) : Expr
++internal data class FunctionExpr(val params: List<String>, val body: Block, val name: String? = null) : Expr
++internal data class RegexValue(val source: String)
++internal sealed interface Stmt
++internal data class Block(val statements: List<Stmt>) : Stmt
++internal data class ExpressionStmt(val expr: Expr) : Stmt
++internal data class Vars(val items: List<Pair<String, Expr?>>) : Stmt
++internal data class IfStmt(val test: Expr, val yes: Stmt, val no: Stmt?) : Stmt
++internal data class ReturnStmt(val expr: Expr?) : Stmt
++internal data class ThrowStmt(val expr: Expr) : Stmt
++internal data class Loop(val init: Stmt?, val test: Expr?, val update: Expr?, val body: Stmt, val doFirst: Boolean = false) : Stmt
++internal data class Jump(val isContinue: Boolean, val label: String?) : Stmt
++internal data class Label(val name: String, val body: Stmt) : Stmt
++internal data class TryStmt(val body: Stmt, val catchName: String?, val handler: Stmt?, val finalizer: Stmt?) : Stmt
++internal data class SwitchStmt(val expr: Expr, val cases: List<Pair<Expr?, List<Stmt>>>) : Stmt
++internal data object EmptyStmt : Stmt
++
++internal class Parser(private val tokens: List<Token>) {
++    private var p = 0
++    private var depth = 0
++    private val t get() = tokens[p].text
++    private fun take(): Token {
++        if (tokens[p].kind == -1) unsupported("Unexpected end of transform definition")
++        return tokens[p++]
++    }
++    private fun accept(s: String): Boolean = if (t == s && tokens[p].kind == 0) { p++; true } else false
++    private fun expect(s: String) { if (!accept(s)) unsupported("Expected '$s' at ${tokens[p].offset}, got '$t'") }
++    private fun identifier(): String {
++        if (tokens[p].kind != 0 || !t.first().let { it.isLetter() || it == '_' || it == '$' }) unsupported("Expected identifier, got '$t'")
++        return take().text
++    }
++    private inline fun <T> nested(body: () -> T): T {
++        if (++depth > 128) unsupported("Parsing depth limit exceeded")
++        try { return body() } finally { depth-- }
++    }
++    fun completeExpression(): Expr {
++        val e = expression()
++        if (tokens[p].kind != -1) unsupported("Unexpected token '$t'")
++        validateDepth(e)
++        return e
++    }
++    fun expression(min: Int = 0): Expr = nested {
++        var left = prefix()
++        while (true) {
++            if (t == "?" && min <= 2) {
++                take(); val yes = expression(1); expect(":"); left = Conditional(left, yes, expression(2)); continue
++            }
++            val prec = precedence[t] ?: break
++            if (prec < min) break
++            val op = take().text
++            left = Binary(op, left, expression(if (prec == 1 || op == "**") prec else prec + 1))
++        }
++        left
++    }
++    private fun prefix(): Expr {
++        val token = take()
++        val text = token.text
++        if (token.kind == 1) return postfix(Lit(text))
++        if (token.kind == 2) {
++            if (text.length > 1 && text[0] == '0' && text[1].isDigit()) unsupported("Legacy octal number literal")
++            val n = when {
++                text.startsWith("0x", true) -> text.drop(2).toLongOrNull(16)?.toDouble()
++                text.startsWith("0b", true) -> text.drop(2).toLongOrNull(2)?.toDouble()
++                text.startsWith("0o", true) -> text.drop(2).toLongOrNull(8)?.toDouble()
++                else -> text.toDoubleOrNull()
++            } ?: unsupported("Unsupported number '$text'")
++            return postfix(Lit(n))
++        }
++        if (token.kind == 3) return postfix(Lit(RegexValue(text)))
++        val base: Expr = when (text) {
++            "!", "~", "+", "-", "typeof", "void", "delete" -> return Unary(text, expression(14))
++            "++", "--" -> return Update(text, expression(14), true)
++            "new" -> {
++                var fn = prefixNew()
++                val args = if (accept("(")) arguments() else emptyList()
++                return postfix(Call(fn, args, true))
++            }
++            "(" -> { val e = expression(); expect(")"); e }
++            "[" -> {
++                val items = mutableListOf<Expr>()
++                while (!accept("]")) {
++                    if (accept(",")) { items.add(Lit(Hole)); continue }
++                    items.add(expression(1))
++                    if (!accept(",")) { expect("]"); break }
++                }
++                ArrayExpr(items)
++            }
++            "{" -> {
++                val items = mutableListOf<Pair<String, Expr>>()
++                while (!accept("}")) {
++                    val key = take().text; expect(":"); items.add(key to expression(1))
++                    if (!accept(",")) { expect("}"); break }
++                }
++                ObjectExpr(items)
++            }
++            "function" -> {
++                val name = if (t != "(") identifier() else null
++                expect("("); val params = mutableListOf<String>()
++                while (!accept(")")) {
++                    params.add(identifier()); if (!accept(",")) { expect(")"); break }
++                }
++                FunctionExpr(params, block(), name)
++            }
++            "true" -> Lit(true); "false" -> Lit(false); "null" -> Lit(null)
++            else -> {
++                if (token.kind != 0 || text.firstOrNull()?.let { it.isLetter() || it == '_' || it == '$' } != true) unsupported("Unsupported expression '$text' at ${token.offset}")
++                Id(text)
++            }
++        }
++        return postfix(base)
++    }
++    private fun prefixNew(): Expr {
++        var e: Expr = Id(identifier())
++        while (true) e = when {
++            accept(".") -> Member(e, Lit(identifier()))
++            accept("[") -> { val key = expression(); expect("]"); Member(e, key) }
++            else -> return e
++        }
++    }
++    private fun postfix(initial: Expr): Expr {
++        var e = initial
++        while (true) e = when {
++            accept(".") -> Member(e, Lit(identifier()))
++            accept("[") -> { val key = expression(); expect("]"); Member(e, key) }
++            accept("(") -> Call(e, arguments())
++            accept("++") -> Update("++", e, false)
++            accept("--") -> Update("--", e, false)
++            else -> return e
++        }
++    }
++    private fun arguments(): List<Expr> {
++        val args = mutableListOf<Expr>()
++        while (!accept(")")) {
++            args.add(expression(1)); if (!accept(",")) { expect(")"); break }
++        }
++        return args
++    }
++    private fun block(): Block = nested {
++        expect("{")
++        val list = mutableListOf<Stmt>()
++        while (!accept("}")) {
++            if (tokens[p].kind == -1) unsupported("Unclosed block")
++            list.add(statement())
++        }
++        Block(list)
++    }
++    private fun vars(): Vars {
++        val list = mutableListOf<Pair<String, Expr?>>()
++        do { val name = identifier(); list.add(name to if (accept("=")) expression(1) else null) } while (accept(","))
++        return Vars(list)
++    }
++    private fun condition(): Expr { expect("("); val e = expression(); expect(")"); return e }
++    fun statement(): Stmt = nested {
++        when {
++            t == "{" -> block()
++            accept(";") -> EmptyStmt
++            accept("var") -> vars().also { accept(";") }
++            accept("let") || accept("const") -> unsupported("Block-scoped declarations are unsupported")
++            accept("if") -> { val e = condition(); val yes = statement(); IfStmt(e, yes, if (accept("else")) statement() else null) }
++            accept("return") -> ReturnStmt(if (t == ";" || t == "}") null else expression()).also { accept(";") }
++            accept("throw") -> ThrowStmt(expression()).also { accept(";") }
++            accept("while") -> Loop(null, condition(), null, statement())
++            accept("do") -> { val body = statement(); expect("while"); Loop(null, condition(), null, body, true).also { accept(";") } }
++            accept("for") -> {
++                expect("(")
++                val init = when {
++                    t == ";" -> null
++                    accept("let") || accept("const") -> unsupported("Block-scoped declarations are unsupported")
++                    accept("var") -> vars()
++                    else -> ExpressionStmt(expression())
++                }
++                expect(";"); val test = if (t == ";") null else expression(); expect(";")
++                val update = if (t == ")") null else expression(); expect(")"); Loop(init, test, update, statement())
++            }
++            accept("break") -> Jump(false, if (t != ";" && t != "}") identifier() else null).also { accept(";") }
++            accept("continue") -> Jump(true, if (t != ";" && t != "}") identifier() else null).also { accept(";") }
++            accept("try") -> {
++                val body = block(); var name: String? = null; var handler: Stmt? = null
++                if (accept("catch")) { expect("("); name = identifier(); expect(")"); handler = block() }
++                val finalizer = if (accept("finally")) block() else null
++                if (handler == null && finalizer == null) unsupported("Invalid try statement")
++                TryStmt(body, name, handler, finalizer)
++            }
++            accept("switch") -> {
++                val expr = condition(); expect("{"); val cases = mutableListOf<Pair<Expr?, List<Stmt>>>()
++                while (!accept("}")) {
++                    val key = if (accept("case")) expression(1) else { expect("default"); null }; expect(":")
++                    val statements = mutableListOf<Stmt>()
++                    while (t != "case" && t != "default" && t != "}") statements.add(statement())
++                    cases.add(key to statements)
++                }
++                SwitchStmt(expr, cases)
++            }
++            tokens.getOrNull(p + 1)?.text == ":" -> { val name = identifier(); expect(":"); Label(name, statement()) }
++            else -> ExpressionStmt(expression()).also { accept(";") }
++        }
++    }
++    companion object {
++        private val precedence = mapOf("," to 0, "=" to 1, "+=" to 1, "-=" to 1, "*=" to 1, "/=" to 1, "%=" to 1, "&=" to 1, "|=" to 1, "^=" to 1, "<<=" to 1, ">>=" to 1, ">>>=" to 1,
++            "||" to 3, "??" to 3, "&&" to 4, "|" to 5, "^" to 6, "&" to 7, "==" to 8, "!=" to 8, "===" to 8, "!==" to 8, "<" to 9, ">" to 9, "<=" to 9, ">=" to 9, "in" to 9, "instanceof" to 9,
++            "<<" to 10, ">>" to 10, ">>>" to 10, "+" to 11, "-" to 11, "*" to 12, "/" to 12, "%" to 12, "**" to 13)
++    }
++}
 diff --git a/settings.gradle.kts b/settings.gradle.kts
-index a505bedd37138f1ff2db9ebbb84d6b976bd16454..597ec959b7af712830d502fce374ba3e05c6a448 100644
+index a505bedd37138f1ff2db9ebbb84d6b976bd16454..342c35dc7fecf5f992486899c1903470a46491a4 100644
 --- a/settings.gradle.kts
 +++ b/settings.gradle.kts
-@@ -15,6 +15,9 @@ plugins {
- dependencyResolutionManagement {
-     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-     repositories {
-+        if (providers.gradleProperty("useMavenLocalQuackJS").isPresent) {
-+            mavenLocal { content { includeGroup("meow.nyx") } }
-+        }
-         google()
-         mavenCentral()
-     }
+@@ -21,4 +21,4 @@ dependencyResolutionManagement {
+ }
+
+ rootProject.name = "innertubex"
+-include(":harness")
++include(":harness", ":quackjs")
 diff --git a/src/androidHostTest/kotlin/com/metrolist/innertubex/cipher/CipherAndroidPackagingTest.kt b/src/androidHostTest/kotlin/com/metrolist/innertubex/cipher/CipherAndroidPackagingTest.kt
 new file mode 100644
 index 0000000000000000000000000000000000000000..76760f96c818676515b1cf626f931453359efb55
