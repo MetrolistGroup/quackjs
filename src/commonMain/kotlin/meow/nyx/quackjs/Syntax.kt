@@ -8,6 +8,7 @@ internal val Token.context: String get() = if (kind == 0) text else "<value>"
 
 /** Lex only selected definitions. Strings and regexes stay opaque while slicing. */
 internal class Lexer(private val source: String, private var p: Int = 0) {
+    val position: Int get() = p
     private var templateDepth = 0
     fun tokens(): List<Token> {
         val out = mutableListOf<Token>()

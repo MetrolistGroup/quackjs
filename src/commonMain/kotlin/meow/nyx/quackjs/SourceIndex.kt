@@ -2,6 +2,19 @@ package meow.nyx.quackjs
 
 /** Lex once to index the player scope; parse and execute only selected dependencies. */
 internal class SourceIndex(val source: String, className: String) {
+    private class ScanBudget {
+        private var tokens = 0
+        private var units = 0
+        fun next(lexer: Lexer, previous: String? = null): Token {
+            if (tokens >= 2_000_000 || units >= 16 * 1024 * 1024) unsupported("Source scan limit exceeded")
+            val start = lexer.position
+            val token = lexer.next(previous)
+            tokens++
+            units += lexer.position - start
+            if (units > 16 * 1024 * 1024) unsupported("Source scan limit exceeded")
+            return token
+        }
+    }
     private data class Assignment(val lhs: List<Token>, val offset: Int, val braces: Int, val parens: Int)
     private val assignments: List<Assignment>
     private val rootBraces: Int
@@ -16,6 +29,7 @@ internal class SourceIndex(val source: String, className: String) {
         if (source.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
         if (className.length > 128 || !identifier(className)) unsupported("Invalid n class hint")
         val lexer = Lexer(source)
+        val scans = ScanBudget()
         val recent = ArrayDeque<Token>()
         val found = mutableListOf<Assignment>()
         val methodCalls = mutableListOf<Triple<String, Int, Int>>()
@@ -40,7 +54,7 @@ internal class SourceIndex(val source: String, className: String) {
             pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
             if (prefixUpdate) {
                 if (token.kind == 0 && identifier(token.text)) {
-                    val next = Lexer(source, token.offset + token.text.length).next(token.context)
+                    val next = scans.next(Lexer(source, token.offset + token.text.length), token.context)
                     recordUpdate(token.text, next.kind == 0 && next.text in listOf(".", "["))
                     prefixUpdate = false
                 }
@@ -90,16 +104,16 @@ internal class SourceIndex(val source: String, className: String) {
         val writes = found.filter { it.braces == rootBraces }
         writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
         val primitives = mutableMapOf<String, Boolean>()
-        fun canMutate(name: String): Boolean = !primitiveDefinition(name, primitives)
+        fun canMutate(name: String): Boolean = !primitiveDefinition(name, primitives, scans)
         val sharedMutations = (methodCalls.filter { it.second == rootBraces }.map { it.first } + writes.filter { it.lhs.size > 1 }.map { it.lhs.first().text } + updates.filter { it.second == rootBraces && it.third }.map { it.first }).filter(::canMutate).toMutableSet()
         // Calls can mutate reference values, but cannot mutate a primitive or its copied aliases.
-        for ((offset, depth) in callArguments) if (depth == rootBraces) argumentReferences(offset).filterTo(sharedMutations, ::canMutate)
+        for ((offset, depth) in callArguments) if (depth == rootBraces) argumentReferences(offset, scans).filterTo(sharedMutations, ::canMutate)
         val aliases = mutableMapOf<String, MutableSet<String>>()
         for (write in writes) {
             if (write.lhs.size != 1) continue
-            val direct = referenceBase(write.offset)
-            val first = if (direct == null) Lexer(source, write.offset).next() else null
-            val targets = if (direct != null) setOf(direct) else if (first?.kind == 0 && first.text in listOf("[", "{")) argumentReferences(first.offset + 1, if (first.text == "[") "]" else "}", first.text) else emptySet()
+            val direct = referenceBase(write.offset, scans)
+            val first = if (direct == null) scans.next(Lexer(source, write.offset)) else null
+            val targets = if (direct != null) setOf(direct) else if (first?.kind == 0 && first.text in listOf("[", "{")) argumentReferences(first.offset + 1, scans, if (first.text == "[") "]" else "}", first.text) else emptySet()
             val alias = write.lhs.single().text
             for (target in targets) {
                 aliases.getOrPut(alias) { mutableSetOf() }.add(target)
@@ -115,13 +129,13 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     /** Prove immutable initializer results without executing unrelated player code. */
-    private fun primitiveDefinition(name: String, known: MutableMap<String, Boolean>, resolving: MutableSet<String> = mutableSetOf()): Boolean {
+    private fun primitiveDefinition(name: String, known: MutableMap<String, Boolean>, scans: ScanBudget, resolving: MutableSet<String> = mutableSetOf()): Boolean {
         known[name]?.let { return it }
         if (resolving.size >= 64 || !resolving.add(name)) return false
         try {
             fun primitive(expr: Expr): Boolean = when (expr) {
                 is Lit -> expr.value == null || expr.value is String || expr.value is Double || expr.value is Boolean
-                is Id -> primitiveDefinition(expr.name, known, resolving)
+                is Id -> primitiveDefinition(expr.name, known, scans, resolving)
                 is Unary -> expr.op in setOf("!", "~", "+", "-", "typeof", "void", "delete")
                 is Binary -> when (expr.op) {
                     "=", "," -> primitive(expr.right)
@@ -136,9 +150,13 @@ internal class SourceIndex(val source: String, className: String) {
             else if (entries.size != 1 || writeCounts[name] != 1) false
             else {
                 val offset = entries.single().offset
-                val first = Lexer(source, offset).next()
+                val first = scans.next(Lexer(source, offset))
                 if (first.kind == 0 && first.text in setOf("function", "{", "[")) false
-                else try { primitive(parseAt(offset)) } catch (_: UnsupportedPlayerException) { false }
+                else {
+                    val tokens = slice(offset, scans)
+                    val expr = try { Parser(tokens).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+                    expr?.let(::primitive) ?: false
+                }
             }
             // A budget cut in a longer alias chain must not poison a shorter proof.
             if (result || resolving.size == 1) known[name] = result
@@ -146,7 +164,7 @@ internal class SourceIndex(val source: String, className: String) {
         } finally { resolving.remove(name) }
     }
 
-    private fun argumentReferences(offset: Int, closing: String = ")", opening: String = "("): Set<String> {
+    private fun argumentReferences(offset: Int, scans: ScanBudget, closing: String = ")", opening: String = "("): Set<String> {
         val lexer = Lexer(source, offset)
         val references = mutableSetOf<String>()
         var previous: String? = opening
@@ -158,7 +176,7 @@ internal class SourceIndex(val source: String, className: String) {
         var reference: Token? = null
         var beforeReference: String? = null
         while (true) {
-            val token = lexer.next(previous)
+            val token = scans.next(lexer, previous)
             if (++count > 150_000) unsupported("Initialization call limit exceeded")
             if (token.kind == -1) unsupported("Unclosed initialization call")
             reference?.let { if (!(token.kind == 0 && token.text == ":" && beforeReference in listOf("{", ","))) references.add(it.text) }
@@ -183,13 +201,13 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     /** Link direct reference paths without evaluating unrelated initializers. */
-    private fun referenceBase(offset: Int): String? {
+    private fun referenceBase(offset: Int, scans: ScanBudget): String? {
         val lexer = Lexer(source, offset)
         var previous: String? = null
         var count = 0
         fun next(): Token? {
             if (++count > 1024) return null
-            return lexer.next(previous).also { previous = it.context }
+            return scans.next(lexer, previous).also { previous = it.context }
         }
         var token = next() ?: return null
         var groups = 0
@@ -230,12 +248,13 @@ internal class SourceIndex(val source: String, className: String) {
 
     fun parseAt(offset: Int): Expr = Parser(slice(offset)).completeExpression()
 
-    fun slice(offset: Int): List<Token> {
+    private fun slice(offset: Int, scans: ScanBudget? = null): List<Token> {
         val lexer = Lexer(source, offset)
         val tokens = mutableListOf<Token>()
         var depth = 0
         while (true) {
-            val token = lexer.next(tokens.lastOrNull()?.context)
+            val previous = tokens.lastOrNull()?.context
+            val token = scans?.next(lexer, previous) ?: lexer.next(previous)
             if (token.kind == -1 || token.kind == 0 && depth == 0 && token.text in setOf(",", ";", ")", "}")) {
                 tokens.add(Token("<eof>", -1, token.offset)); return tokens
             }

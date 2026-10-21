@@ -54,10 +54,30 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun uint(value: Any?): Long { if (value is String) tick(value.length); return meow.nyx.quackjs.uint(value) }
     private fun integer(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.integer(value) }
     private fun relative(value: Any?, length: Int): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.relative(value, length) }
-    private fun scan(length: Int, width: Int) {
-        val cost = if (width > length) 1L else (length - width + 1).toLong() * width.coerceAtLeast(1)
-        if (cost > 2_000_000) unsupported("Execution step limit exceeded")
-        tick(cost.toInt())
+    private fun find(value: String, search: String, from: Int, backwards: Boolean = false): Int {
+        tick()
+        if (search.isEmpty()) return from
+        if (search.length == 1) {
+            val result = if (backwards) value.lastIndexOf(search[0], from) else value.indexOf(search[0], from)
+            val cost = if (backwards) {
+                val start = minOf(from, value.lastIndex)
+                if (result < 0) start + 1 else start - result + 1
+            } else if (result < 0) value.length - from else result - from + 1
+            tick(cost)
+            return result
+        }
+        val last = value.length - search.length
+        val candidates = if (backwards) minOf(from, last) downTo 0 else from..last
+        for (index in candidates) {
+            var matched = 0
+            while (matched < search.length) {
+                tick()
+                if (value[index + matched] != search[matched]) break
+                matched++
+            }
+            if (matched == search.length) return index
+        }
+        return -1
     }
     private fun equal(a: Any?, b: Any?, strict: Boolean): Boolean {
         if (a is String && b is String) { if (a.length == b.length) tick(a.length) }
@@ -451,9 +471,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     if (separator.isEmpty()) {
                         while (start < value.length && parts.size.toLong() < limit) { addPart(start, start + 1); start++ }
                     } else while (parts.size.toLong() < limit) {
-                        if (separator.length > 1) r.scan(value.length - start, separator.length)
-                        val end = value.indexOf(separator, start)
-                        r.tick(if (end < 0) value.length - start else end - start + separator.length)
+                        val end = r.find(value, separator, start)
                         if (end < 0) { addPart(start, value.length); break }
                         addPart(start, end)
                         start = end + separator.length
@@ -474,17 +492,17 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "charCodeAt", "charAt" -> Native { r, self, a -> val value = stringReceiver(self); val i = r.integer(a.getOrElse(0) { 0.0 }); if (i !in value.indices) if (name == "charAt") "" else Double.NaN else if (name == "charAt") value[i].toString() else value[i].code.toDouble() }
         "indexOf", "lastIndexOf" -> Native { r, self, a ->
             val value = stringReceiver(self)
-            val search = text(a.getOrElse(0) { Undefined }); r.scan(value.length, search.length)
+            val search = text(a.getOrElse(0) { Undefined })
             val from = if (a.size < 2 || a[1] === Undefined || name == "lastIndexOf" && r.number(a[1]).isNaN()) if (name == "indexOf") 0 else value.length else r.integer(a[1]).coerceIn(0, value.length)
-            if (name == "indexOf") value.indexOf(search, from).toDouble() else value.lastIndexOf(search, from).toDouble()
+            r.find(value, search, from, backwards = name == "lastIndexOf").toDouble()
         }
         "startsWith", "endsWith", "includes" -> Native { r, self, a ->
             val value = stringReceiver(self)
             if (a.firstOrNull() is RegexValue) throw JsThrown("Regex argument")
             val search = text(a.getOrElse(0) { Undefined })
-            if (name == "includes") r.scan(value.length, search.length) else r.tick(value.length)
+            if (name != "includes") r.tick(value.length)
             val pos = if (a.size < 2 || a[1] === Undefined) if (name == "endsWith") value.length else 0 else r.integer(a[1]).coerceIn(0, value.length)
-            when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> value.indexOf(search, pos) >= 0 }
+            when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> r.find(value, search, pos) >= 0 }
         }
         "toString", "valueOf" -> Native { _, self, _ -> self as? String ?: throw JsThrown("Invalid string method receiver") }
         else -> Undefined

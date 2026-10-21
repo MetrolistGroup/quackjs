@@ -251,6 +251,15 @@ class PlayerProgramTest {
         assertFailsWith<UnsupportedPlayerException> { compile("return recur(x);", extra = "var recur=function(x){return recur(x)};") }
     }
 
+    @Test fun nestedInitializationCallsShareTheirSourceScanBudget() {
+        val expression = List(50_000) { "1" }.joinToString("+")
+        for (value in listOf(expression, "'${"x".repeat(1_000_000)}'")) {
+            val nested = "f(".repeat(500) + value + ")".repeat(500)
+            val error = assertFailsWith<UnsupportedPlayerException> { compile(extra = "var unused=$nested;") }
+            assertTrue(error.message!!.contains("Source scan limit"), error.message)
+        }
+    }
+
     @Test fun functionFramesConsumeTheAllocationBudget() {
         val locals = (0 until 10_000).joinToString(",") { "v$it" }
         val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){var $locals;};")
@@ -277,6 +286,26 @@ class PlayerProgramTest {
         val value = "x".repeat(8_000_000)
         val split = runtime.invoke(runtime.get(value, "split"), value, listOf("", 1.0)) as JsArray
         assertEquals(listOf<Any?>("x"), split.values)
+    }
+
+    @Test fun multiCharacterSplitChargesOnlyVisitedCandidates() {
+        val entries = List(1_001) { "x" }.joinToString("||")
+        val p = compile("return entries.length+':'+entries[1000]+':'+x;", extra = "var entries='$entries'.split('||');")
+        assertEquals("1001:x:abc", p.decipherSignature("abc"))
+        val split = compile("return x.split('||').join(',');")
+        for ((input, expected) in listOf(
+            "" to "", "||" to ",", "||||" to ",,", "x|||y" to "x,|y",
+            "a||b||" to "a,b,", "\ud83d\ude00||\u2603" to "\ud83d\ude00,\u2603",
+        )) assertEquals(expected, split.decipherSignature(input), input)
+        assertEquals("a,b", compile("return x.split('||',2).join(',');").decipherSignature("a||b||c"))
+        assertEquals("|ba", compile("return x.split('aba').join('|');").decipherSignature("ababa"))
+        val unmatched = "a".repeat(6_000)
+        assertEquals(unmatched, compile("return x.split(separator).join('|');", extra = "var separator='${"b".repeat(1_000)}';").decipherSignature(unmatched))
+    }
+
+    @Test fun budgetedStringSearchPreservesJavaScriptPositions() {
+        assertEquals("1:1:2:0:1:true", compile("return [x.indexOf('aa',1),x.lastIndexOf('aa',1),x.lastIndexOf('aa'),x.indexOf(''),x.lastIndexOf('',1),x.includes('aa',2)].join(':');").decipherSignature("aaaa"))
+        assertEquals("3:0:3:4:-1:-1:-1", compile("return [x.indexOf('a',1),x.lastIndexOf('a',2),x.lastIndexOf('a'),x.lastIndexOf('',9),x.indexOf('a',99),''.indexOf('a'),''.lastIndexOf('a')].join(':');").decipherSignature("abca"))
     }
 
     @Test fun joinRejectsOverflowingLengthsBeforeAllocatingOutput() {
@@ -307,7 +336,7 @@ class PlayerProgramTest {
         }
     }
 
-    @Test fun quadraticStringSearchesFailBeforeEnteringPlatformSearch() {
+    @Test fun quadraticStringSearchesConsumeTheStepBudget() {
         val extra = "var haystack='${"a".repeat(65_536)}';var needle='${"a".repeat(32_767)}b';"
         for (method in listOf("indexOf", "lastIndexOf", "includes", "split")) {
             val p = compile("if(x.length<5)haystack.$method(needle);return x;", extra = extra)
