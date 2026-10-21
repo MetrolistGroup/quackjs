@@ -115,14 +115,20 @@ when intentionally rotating the corpus.
 
 ## Publication checks
 
-The release workflow uses
-`python3 scripts/verify-publication.py <Maven-group-directory> <version>` against
-the downloaded or locally generated Maven group directory, normally
-`com.github.MetrolistGroup` (path `com/github/MetrolistGroup`):
+The checker currently included in this checkout validates only the local
+`meow.nyx:quackjs:0.1.0-SNAPSHOT` build. From the repository root:
 
 ```sh
-python3 scripts/verify-publication.py "$HOME/.m2/repository/com/github/MetrolistGroup" 0.1.0
+./gradlew publishToMavenLocal
+python3 integrations/verify-quackjs-publication.py "$HOME/.m2/repository/meow/nyx"
 ```
+
+Its version is hardcoded to `0.1.0-SNAPSHOT`; it cannot verify the target release.
+The planned replacement command,
+`python3 scripts/verify-publication.py <Maven-group-directory> <version>`, is
+**not available in this checkout**. Release setup must provide that parameterized
+verifier before checking `com.github.MetrolistGroup` artifacts at version `0.1.0`.
+Do not pass release artifacts to the snapshot checker.
 
 Local publication checks do not prove hosted availability. Before adoption, check
 JitPack metadata and resolve each required platform variant in a fresh external
