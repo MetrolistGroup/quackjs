@@ -28,7 +28,7 @@ Add QuackJS to `commonMain` in `build.gradle.kts`:
 ```kotlin
 kotlin {
     sourceSets.commonMain.dependencies {
-        implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.1")
+        implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.2")
     }
 }
 ```

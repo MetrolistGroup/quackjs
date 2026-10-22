@@ -12,7 +12,7 @@ dependencyResolutionManagement {
     repositories { maven("https://jitpack.io") }
 }
 // KMP commonMain dependencies:
-implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.1")
+implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.2")
 ```
 
 Targets: Android (min SDK 23), JVM (Java 17), Linux x64, iOS arm64 and iOS simulator

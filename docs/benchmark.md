@@ -124,11 +124,11 @@ assuming immutable tables.
 
 This opt-in harness uses the 15,171-UTF-16-unit `eb27e5fd` **dependency extract**,
 not full players. Reproduce on Linux x64 after Gradle downloads Kotlin/Native
-2.4.20 (for example via `./gradlew linuxX64Test`):
+2.4.21 (for example via `./gradlew linuxX64Test`):
 
 ```sh
 set -eu
-native="$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.20"
+native="$HOME/.konan/kotlin-native-prebuilt-linux-x86_64-2.4.21"
 out=$(mktemp -d)
 "$native/bin/konanc" -opt \
   -entry meow.nyx.quackjs.nativePerformanceLane31 \

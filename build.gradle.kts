@@ -1,12 +1,12 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("multiplatform") version "2.4.20"
+    kotlin("multiplatform") version "2.4.21"
     id("com.android.kotlin.multiplatform.library") version "9.4.1"
     `maven-publish`
 }
 group = "com.github.MetrolistGroup.quackjs"
-version = providers.gradleProperty("VERSION_NAME").orElse("0.1.1").get()
+version = providers.gradleProperty("VERSION_NAME").orElse("0.1.2").get()
 kotlin {
     android {
         namespace = "meow.nyx.quackjs"
@@ -28,7 +28,7 @@ kotlin {
             dependencies {
                 implementation("io.github.dokar3:quickjs-kt-jvm:1.0.15")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
             }
             if (providers.gradleProperty("oracleOnly").isPresent) {
                 kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt", "**/Lane32Acceptance*.kt")
