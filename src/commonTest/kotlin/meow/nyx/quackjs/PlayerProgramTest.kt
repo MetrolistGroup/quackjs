@@ -651,6 +651,11 @@ class PlayerProgramTest {
         val p = compile("return String.fromCharCode(65,65536+66)+':'+(new Date('1970-01-01T09:45:22.000+09:45')/1000);")
         assertEquals("AB:22", p.decipherSignature("abc"))
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
-        assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
+        assertEquals("abab", compile("return 'ab'.repeat(2.9);").decipherSignature("x"))
+        assertEquals("", compile("return 'x'.repeat(-0.1);").decipherSignature("x"))
+        assertEquals("", compile("return 'x'.repeat();").decipherSignature("x"))
+        assertEquals("caught:caught", compile("var a,b;try{'x'.repeat(-1)}catch(e){a='caught'}try{''.repeat(1/0)}catch(e){b='caught'}return a+':'+b;").decipherSignature("x"))
+        assertEquals("xx", compile("return 'x'.repeat('2');").decipherSignature("x"))
+        assertFailsWith<UnsupportedPlayerException> { compile("return 'ab'.repeat(40000);").decipherSignature("x") }
     }
 }

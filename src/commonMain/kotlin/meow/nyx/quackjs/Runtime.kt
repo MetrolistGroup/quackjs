@@ -414,7 +414,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
     val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
-    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
+    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "repeat", "toString", "valueOf").associateWith(::stringMethod)
     private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
         return when (name) {
@@ -509,6 +509,24 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun arrayValues(self: Any?): MutableList<Any?> = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
     private fun stringReceiver(self: Any?): String = if (self == null || self === Undefined) throw JsThrown("Invalid string method receiver") else text(self)
     private fun stringMethod(name: String): Any? = when (name) {
+        "repeat" -> Native { r, self, a ->
+            val value = stringReceiver(self)
+            val rawCount = r.number(a.getOrElse(0) { Undefined })
+            val count = when {
+                rawCount.isNaN() || rawCount == 0.0 -> 0.0
+                rawCount < 0.0 -> ceil(rawCount)
+                else -> floor(rawCount)
+            }
+            if (count < 0.0 || count == Double.POSITIVE_INFINITY || count == Double.NEGATIVE_INFINITY) throw JsThrown("Invalid count value")
+            if (count == 0.0 || value.isEmpty()) r.string("")
+            else {
+                val outputSize = value.length.toDouble() * count
+                if (!outputSize.isFinite() || outputSize > 65_536.0) unsupported("String size limit exceeded")
+                val size = outputSize.toInt()
+                r.tick(size)
+                r.string(value.repeat(count.toInt()))
+            }
+        }
         "split" -> Native { r, self, a ->
             val value = stringReceiver(self)
             if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
