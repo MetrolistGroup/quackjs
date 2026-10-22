@@ -69,7 +69,7 @@ internal fun lane32Verify(player: RealPlayer, program: PlayerProgram): List<Chal
         check(valid.none { it.output.startsWith("enhanced_except_") }) { "${player.id}: oracle error sentinel" }
         check(js.solve(valid.reversed()) == expectedJson(valid.reversed())) { "${player.id}: oracle retained invocation state" }
         for (c in lane32Malformed()) {
-            val expected = js.solve(listOf(c))
+            val expected = js.solve(listOf(c), requireStrings = c.kind == "signature")
             val actual = try {
                 lane32Solve(program, listOf(c))
             } catch (failure: UnsupportedPlayerException) {

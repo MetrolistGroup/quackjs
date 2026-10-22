@@ -209,6 +209,14 @@ six-player read-only oracle and **149 JVM, 134 Android-host, 134 Linux** tests
 passed (no skips). New JVM negatives reject initialization errors and missing,
 null, thrown, unchanged, sentinel or mismatched oracle results.
 
+A follow-up guard checks primitive string types **inside QuickJS before JSON
+serialization**, in both compiled and direct batches. Boxed strings and objects
+with string-returning `toJSON` methods now fail for both transforms. The regression
+failed before the fix; afterward **150 JVM tests** and **200/200 QuickJS players**
+(400 contexts, 24,800 comparisons) passed. Follow-up logs, XML and JSON are under
+`/tmp/quackjs-cross-engine-67d2c39/string-type-review/`. Only malformed n diagnostics
+retain non-string results; no parity check opts out of validation.
+
 An empty-cache QuickJS run exited **1**, reporting **0 passed / 200 source
 failures**, not skips (`missing-source-report.json`). Reproduce with
 `./gradlew faraday200OracleVerification -PfaradayCache="$(mktemp -d)"`;

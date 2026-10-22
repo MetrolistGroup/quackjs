@@ -2,17 +2,20 @@ package meow.nyx.quackjs.verification
 
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class Faraday200OracleTest {
-    private fun player(body: String = "return 'valid_value'", initialization: String = ""): RealPlayer = RealPlayer(
+    private fun player(body: String = "return 'valid_value'", initialization: String = "",
+        signatureBody: String = "return 'signature_value'"): RealPlayer = RealPlayer(
         "synthetic", """
             var _yt_player={};
             (function(g){
                 $initialization
-                function Ab(a,b,input){return 'signature_value'}
+                function Ab(a,b,input){$signatureBody}
                 g.CD=function(url){this.get=function(){$body}};
             })(_yt_player);
         """.trimIndent(), "", "Ab(1,2,INPUT)", "CD", 123,
@@ -27,6 +30,22 @@ class Faraday200OracleTest {
         assertEquals("pass", result.text("status"))
         assertEquals(2, result.getValue("contexts").jsonPrimitive.int)
         assertEquals(8, result.getValue("checked").jsonPrimitive.int)
+    }
+
+    @Test
+    fun boxedStringsAndToJsonObjectsCannotMasqueradeAsPrimitiveStrings() {
+        for (kind in listOf("signature", "n")) {
+            val output = if (kind == "signature") "signature_value" else "valid_value"
+            for (value in listOf("new String('$output')", "({toJSON:function(){return '$output'}})")) {
+                val player = if (kind == "signature") player(signatureBody = "return $value") else player("return $value")
+                val result = verifyFaradayOracle(player)
+                assertEquals("fail", result.text("status"), "$kind: $value")
+                assertEquals(0, result.getValue("checked").jsonPrimitive.int)
+                val errors = result.getValue("errors").jsonArray.map { it.jsonObject }
+                assertEquals(listOf("compiled-repeat", "fresh-context"), errors.map { it.text("phase") })
+                errors.forEach { assertTrue(it.text("reason").contains("non-string"), it.toString()) }
+            }
+        }
     }
 
     @Test

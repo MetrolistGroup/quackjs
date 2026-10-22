@@ -42,15 +42,24 @@ internal class QuickJsPlayer private constructor(
         }
     }
 
-    fun solve(cases: List<Challenge>): String = runBlocking(thread) {
-        js.evaluate<String>("JSON.stringify(${inputsJson(cases)}.map(c => c[0] === 'signature' ? __quackSig(c[1]) : __quackN(c[1])))")
+    /** Disable string validation only for malformed URL-wrapper diagnostics, never parity checks. */
+    fun solve(cases: List<Challenge>, requireStrings: Boolean = true): String = runBlocking(thread) {
+        js.evaluate<String>(batchScript(inputsJson(cases), requireStrings))
     }
 
     /** Hoist input transfer and bridge compilation out of steady-state samples. */
     fun prepareBatch(cases: List<Challenge>): ByteArray = runBlocking(thread) {
         js.evaluate<Any?>("globalThis.__quackCases=${inputsJson(cases)}; undefined;")
-        js.compile("JSON.stringify(__quackCases.map(c => c[0] === 'signature' ? __quackSig(c[1]) : __quackN(c[1])))")
+        js.compile(batchScript("__quackCases", requireStrings = true))
     }
+
+    private fun batchScript(inputs: String, requireStrings: Boolean): String = """
+        JSON.stringify($inputs.map(c => {
+            const output = c[0] === 'signature' ? __quackSig(c[1]) : __quackN(c[1]);
+            ${if (requireStrings) "if (typeof output !== 'string') throw new TypeError(c[0] + ' oracle returned non-string');" else ""}
+            return output;
+        }))
+    """.trimIndent()
 
     fun runBatch(bytecode: ByteArray): String = runBlocking(thread) { js.evaluate<String>(bytecode) }
 
