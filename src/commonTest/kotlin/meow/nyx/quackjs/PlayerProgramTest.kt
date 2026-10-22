@@ -553,6 +553,15 @@ class PlayerProgramTest {
         """.trimIndent()).decipherSignature("x"))
     }
 
+    @Test fun arrayIterationMethodsPreserveHolesCallbacksAndSameValueZero() {
+        assertEquals("6::10|true|false|true", compile("var a=[1,,3],context={n:2},mapped=a.map(function(v,i,source){return v+this.n+i+source.length},context);return [mapped.join(':'),String(0 in mapped),String(1 in mapped),String(2 in mapped)].join('|');").decipherSignature("x"))
+        assertEquals("1:3", compile("return [0,1,,2,3].filter(function(v){return v%2}).join(':');").decipherSignature("x"))
+        assertEquals("true:false:4", compile("var n=0,a=[1,2,3],s=a.some(function(v){n++;return v==2}),e=a.every(function(v){n++;return v<2});return [s,e,n].join(':');").decipherSignature("x"))
+        assertEquals("8:3220", compile("var a=[,,2,3],left=a.reduce(function(acc,v,i){return acc+v+i}),right=[2,,3].reduceRight(function(acc,v,i){return acc+v+i},'');return left+':'+right;").decipherSignature("x"))
+        assertEquals("true:true:-1:true:false", compile("var a=[NaN,,];return [a.includes(NaN),a.includes(undefined),a.indexOf(undefined),['a','b','c'].includes('c',-1),['a','b','c'].includes('a',-1)].join(':');").decipherSignature("x"))
+        assertEquals("caught:caught", compile("var a=[];var first;try{a.map(null)}catch(e){first='caught'}try{a.reduce(function(){})}catch(e){return first+':caught'}return 'wrong';").decipherSignature("x"))
+    }
+
     @Test fun nullEqualityAndNumericWhitespaceMatchJavaScript() {
         assertEquals("false:false:false:true:false:1:NaN:NaN", compile("return [false==null,0==null,''==null,null==undefined,null===undefined,Number('\\ufeff1'),Number('\\u001c1'),Number('0x\\uff11')].join(':');").decipherSignature("x"))
         assertEquals("1:1:1:1", compile("return [Number('\\u00a01'),Number('\\u16801'),Number('\\u20001'),Number('\\u202f1')].join(':');").decipherSignature("x"))

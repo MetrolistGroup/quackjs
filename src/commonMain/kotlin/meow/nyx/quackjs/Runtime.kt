@@ -413,7 +413,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
-    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
+    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "map", "filter", "some", "every", "reduce", "reduceRight", "includes", "forEach", "indexOf").associateWith(::arrayMethod)
     val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
     private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
@@ -464,6 +464,101 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 }
                 removed
             }
+            "map" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val callback = a.getOrElse(0) { Undefined }
+                val thisArg = a.getOrElse(1) { Undefined }
+                r.requireArrayCallback(callback, name)
+                val length = target.values.size
+                r.allocate(length)
+                val mapped = MutableList<Any?>(length) { Hole }
+                for (i in 0 until length) {
+                    r.tick()
+                    if (i < target.values.size && target.values[i] !== Hole) mapped[i] = r.invokeArrayCallback(callback, thisArg, target.values[i], i, target)
+                }
+                JsArray(mapped)
+            }
+            "filter" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val callback = a.getOrElse(0) { Undefined }
+                val thisArg = a.getOrElse(1) { Undefined }
+                r.requireArrayCallback(callback, name)
+                val length = target.values.size
+                val filtered = mutableListOf<Any?>()
+                for (i in 0 until length) {
+                    r.tick()
+                    val value = target.values.getOrElse(i) { Undefined }
+                    if (i < target.values.size && value !== Hole && truth(r.invokeArrayCallback(callback, thisArg, value, i, target))) {
+                        r.allocate(1)
+                        filtered.add(value)
+                    }
+                }
+                r.allocate(0)
+                JsArray(filtered)
+            }
+            "some", "every" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val callback = a.getOrElse(0) { Undefined }
+                val thisArg = a.getOrElse(1) { Undefined }
+                r.requireArrayCallback(callback, name)
+                val length = target.values.size
+                for (i in 0 until length) {
+                    r.tick()
+                    if (i < target.values.size && target.values[i] !== Hole) {
+                        val accepted = truth(r.invokeArrayCallback(callback, thisArg, target.values[i], i, target))
+                        if (name == "some" && accepted) return@Native true
+                        if (name == "every" && !accepted) return@Native false
+                    }
+                }
+                name == "every"
+            }
+            "reduce", "reduceRight" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val callback = a.getOrElse(0) { Undefined }
+                if (callback !is JsFunction && callback !is Native) throw JsThrown("Invalid $name callback")
+                val length = target.values.size
+                val direction = if (name == "reduce") 1 else -1
+                var index = if (direction > 0) 0 else length - 1
+                val end = if (direction > 0) length else -1
+                val hasInitial = a.size > 1
+                var foundInitial = hasInitial
+                var accumulator: Any? = if (hasInitial) a[1] else Undefined
+                if (!hasInitial) {
+                    while (index != end) {
+                        r.tick()
+                        if (index < target.values.size && target.values[index] !== Hole) {
+                            accumulator = target.values[index]
+                            foundInitial = true
+                            index += direction
+                            break
+                        }
+                        index += direction
+                    }
+                    if (!foundInitial) throw JsThrown("Reduce of empty array with no initial value")
+                }
+                while (index != end) {
+                    r.tick()
+                    if (index < target.values.size && target.values[index] !== Hole) {
+                        accumulator = r.invoke(callback, Undefined, listOf(accumulator, target.values[index], index.toDouble(), target))
+                    }
+                    index += direction
+                }
+                accumulator
+            }
+            "includes" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val values = target.values
+                val rawStart = a.getOrElse(1) { 0.0 }
+                val offset = r.integer(rawStart)
+                val start = if (offset < 0) (values.size.toLong() + offset).coerceAtLeast(0).toInt() else offset.coerceAtMost(values.size)
+                val search = a.getOrElse(0) { Undefined }
+                for (i in start until values.size) {
+                    r.tick()
+                    val value = if (values[i] === Hole) Undefined else values[i]
+                    if (r.sameValueZero(value, search)) return@Native true
+                }
+                false
+            }
             "forEach" -> Native { r, self, a ->
                 val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
                 val v = target.values
@@ -506,6 +601,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             else -> Undefined
         }
     }
+    private fun Runtime.requireArrayCallback(callback: Any?, name: String) {
+        if (callback !is JsFunction && callback !is Native) throw JsThrown("Invalid $name callback")
+    }
+    private fun Runtime.invokeArrayCallback(callback: Any?, thisArg: Any?, value: Any?, index: Int, target: JsArray): Any? {
+        requireArrayCallback(callback, "array method")
+        return invoke(callback, thisArg, listOf(value, index.toDouble(), target))
+    }
+    private fun Runtime.sameValueZero(left: Any?, right: Any?): Boolean =
+        (left is Double && right is Double && left.isNaN() && right.isNaN()) || equal(left, right, strict = true)
     private fun arrayValues(self: Any?): MutableList<Any?> = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
     private fun stringReceiver(self: Any?): String = if (self == null || self === Undefined) throw JsThrown("Invalid string method receiver") else text(self)
     private fun stringMethod(name: String): Any? = when (name) {
