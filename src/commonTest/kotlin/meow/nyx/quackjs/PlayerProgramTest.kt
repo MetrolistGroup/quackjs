@@ -111,29 +111,32 @@ class PlayerProgramTest {
             if(value.length>10)rootN(this,value,value.length);else bridge(this,value);
             this.raw.replace('x','y');return this.V[k];
         """.trimIndent())
-        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(branching, PlayerHints("sig(INPUT)", "C", 12345)) }
+        val branchProgram = PlayerProgram.compile(branching, PlayerHints("sig(INPUT)", "C", 12345))
+        for (input in listOf("abcdef", "xy", "", "another-challenge")) assertEquals(input.reversed(), branchProgram.transformN(input))
         val doubled = (1..30).joinToString("") { "var v$it=v${it - 1}+v${it - 1};" }
         val expanding = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v0=this.V.n.length;$doubled rootN(this,this.V.n,v30);this.raw.replace('x','y');return this.V[k];")
-        val error = assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(expanding, PlayerHints("sig(INPUT)", "C", 12345)) }
-        assertTrue(error.message!!.contains("Syntax tree node limit"))
+        val expanded = PlayerProgram.compile(expanding, PlayerHints("sig(INPUT)", "C", 12345))
+        assertEquals("fedcba", expanded.transformN("abcdef"))
     }
 
     @Test fun nIsolationRejectsStaleSubstitutedLocalsAndRootWrites() {
         val extra = "var rootN=function(o,v){o.set('n',v.split('').reverse().join(''));};"
-        for (body in listOf(
-            "var v=this.V.n;v=v.slice(1);rootN(this,v);",
-            "var v=this.V.n;v+='!';rootN(this,v);",
-            "var v=this.V.n;if(v.length<4)v='changed';rootN(this,v);",
-            "var v=this.V.n;v++;rootN(this,v);",
-            "var v=this.V.n;this.raw;var v='changed';rootN(this,v);",
-            "var v=this.V.n;var mutate=function(){v=v.slice(1)};mutate();rootN(this,v);",
-            "var v=this.V.n;var mutate=function(){v+='!'};mutate();rootN(this,v);",
-            "var o=this;var mutate=function(){o.V.n=o.V.n.slice(1)};mutate();rootN(this,this.V.n);",
-            "this.V.n=this.V.n.slice(1);rootN(this,this.V.n);",
-        )) {
+        val validTransforms = listOf(
+            "var v=this.V.n;v=v.slice(1);rootN(this,v);" to "fedcb",
+            "var v=this.V.n;v+='!';rootN(this,v);" to "!fedcba",
+            "var v=this.V.n;if(v.length<4)v='changed';rootN(this,v);" to "fedcba",
+            "var v=this.V.n;this.raw;var v='changed';rootN(this,v);" to "degnahc",
+            "var v=this.V.n;var mutate=function(){v=v.slice(1)};mutate();rootN(this,v);" to "fedcb",
+            "var v=this.V.n;var mutate=function(){v+='!'};mutate();rootN(this,v);" to "!fedcba",
+            "var o=this;var mutate=function(){o.V.n=o.V.n.slice(1)};mutate();rootN(this,this.V.n);" to "fedcb",
+            "this.V.n=this.V.n.slice(1);rootN(this,this.V.n);" to "fedcb",
+        )
+        for ((body, expected) in validTransforms) {
             val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
-            assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+            assertEquals(expected, PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abcdef"), body)
         }
+        val invalid = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v=this.V.n;v++;rootN(this,v);this.raw.replace('x','y');return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(invalid, PlayerHints("sig(INPUT)", "C", 12345)) }
         val supported = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v=this.V.n;v=v.slice(1);rootN(this,v);return this.V[k];")
         assertEquals("cb", PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
     }
@@ -153,20 +156,24 @@ class PlayerProgramTest {
         for (body in listOf(
             "var flag=0;if(flag)rootN(this,this.V.n);flag=1;",
             "var flag=1;flag=0;if(flag)rootN(this,this.V.n);",
-            "rootN(this,this.V.n);this.V.n='later';",
-            "var v=this.V.n;if(v.length>10)rootN(this,v);v='later';",
-            "var v=this.V.n,i=0;while(true){rootN(this,v);v='changed';if(i++>0)break;}",
             "var i=0;while(true){rootN(this,this.V.n);if(i++>0)break;}",
-            "var v=this.V.n;rootN(this,v);v='changed';rootN(this,v);",
-            "rootN(this,this.V.n);rootN(this,this.V.n.slice(1));",
             "rootN(this,this.V.n);if(this.V.n.length>10)rootN(this,this.V.n);",
-            "var v=this.V.n;rootN(this,v);v='changed';rootN.call(null,this,v);",
-            "var v=this.V.n;rootN(this,v);v='changed';rootN.apply(null,[this,v]);",
-            "var flag=1;if(flag)rootN(this,this.V.n);flag=2;this.set('n','later');",
         )) {
             val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
             assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
         }
+        val guardedLocal = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v=this.V.n;if(v.length>10)rootN(this,v);v='later';this.raw.replace('x','y');return this.V[k];")
+        val guardedProgram = PlayerProgram.compile(guardedLocal, PlayerHints("sig(INPUT)", "C", 12345))
+        assertEquals("abc", guardedProgram.transformN("abc"))
+        assertEquals("lkjihgfedcba", guardedProgram.transformN("abcdefghijkl"))
+        val repeatedRoot = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "rootN(this,this.V.n);rootN(this,this.V.n.slice(1));this.raw.replace('x','y');return this.V[k];")
+        assertEquals("ab", PlayerProgram.compile(repeatedRoot, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
+        val repeatedLocal = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var v=this.V.n;rootN(this,v);v='changed';rootN(this,v);this.raw.replace('x','y');return this.V[k];")
+        assertEquals("degnahc", PlayerProgram.compile(repeatedLocal, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
+        val overwritten = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "rootN(this,this.V.n);this.V.n='later';this.raw.replace('x','y');return this.V[k];")
+        assertEquals("later", PlayerProgram.compile(overwritten, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
+        val setterOverwrite = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var flag=1;if(flag)rootN(this,this.V.n);flag=2;this.set('n','later');this.raw.replace('x','y');return this.V[k];")
+        assertEquals("later", PlayerProgram.compile(setterOverwrite, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
     }
 
     @Test fun primitivePropertyArgumentsDoNotEscapeTheirOwners() {
@@ -307,23 +314,31 @@ class PlayerProgramTest {
             var bridge=function(o){if(o.V.n.length>10)rootN(o);o.raw.replace('x','y');};
         """
         val bodies = listOf(
-            "if(this.V.n.length>10)rootN(this);",
-            "this.V.n.length>10&&rootN(this);",
-            "this.V.n.length<=10||rootN(this);",
-            "this.V.n.length>10?rootN(this):null;",
-            "var value=this.V.n;if(value.length>10)rootN(this);",
-            "if(check(this))rootN(this);",
-            "if(this.V.n.length<=10)return this.V[k];rootN(this);",
-            "if(true){if(this.V.n.length<=10)return this.V[k];}rootN(this);",
-            "while(this.V.n.length>10){rootN(this);break;}",
-            "switch(this.V.n.length){case 19:case 24:rootN(this);break;}",
-            "bridge(this);",
-            "return this.V[k];rootN(this);",
+            "if(this.V.n.length>10)rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "this.V.n.length>10&&rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "this.V.n.length<=10||rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "this.V.n.length>10?rootN(this):null;" to ("abc" to "lkjihgfedcba"),
+            "var value=this.V.n;if(value.length>10)rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "if(check(this))rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "if(this.V.n.length<=10)return this.V[k];rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "if(true){if(this.V.n.length<=10)return this.V[k];}rootN(this);" to ("abc" to "lkjihgfedcba"),
+            "while(this.V.n.length>10){rootN(this);break;}" to ("abc" to "lkjihgfedcba"),
+            "bridge(this);" to ("abc" to "lkjihgfedcba"),
         )
-        for (body in bodies) {
+        for ((body, expected) in bodies) {
             val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$body this.raw.replace('x','y');return this.V[k];")
-            assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+            val program = PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345))
+            assertEquals(expected.first, program.transformN("abc"), body)
+            assertEquals(expected.second, program.transformN("abcdefghijkl"), body)
         }
+        val switchGuard = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "switch(this.V.n.length){case 19:case 24:rootN(this);break;} this.raw.replace('x','y');return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(switchGuard, PlayerHints("sig(INPUT)", "C", 12345)) }
+        val earlyExit = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "return this.V[k];rootN(this);this.raw.replace('x','y');")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(earlyExit, PlayerHints("sig(INPUT)", "C", 12345)) }
+        val inputGuard = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "if(this.V.n.length>10)rootN(this);this.raw.replace('x','y');return this.V[k];")
+        val guarded = PlayerProgram.compile(inputGuard, PlayerHints("sig(INPUT)", "C", 12345))
+        assertEquals("abc", guarded.transformN("abc"))
+        assertEquals("lkjihgfedcba", guarded.transformN("abcdefghijkl"))
         val supported = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "if(this.V.n.length>10)rootN(this);return this.V[k];")
         val program = PlayerProgram.compile(supported, PlayerHints("sig(INPUT)", "C", 12345))
         assertEquals("abc", program.transformN("abc"))
@@ -332,8 +347,8 @@ class PlayerProgramTest {
         assertEquals("cba", PlayerProgram.compile(constant, PlayerHints("sig(INPUT)", "C", 12345)).transformN("abc"))
         val manyGuards = "if(this.raw)return this.V[k];".repeat(130)
         val bounded = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$manyGuards rootN(this);this.raw.replace('x','y');return this.V[k];")
-        val error = assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(bounded, PlayerHints("sig(INPUT)", "C", 12345)) }
-        assertTrue(error.message!!.contains("n control-flow limit"))
+        val boundedProgram = PlayerProgram.compile(bounded, PlayerHints("sig(INPUT)", "C", 12345))
+        assertEquals("cba", boundedProgram.transformN("abc"))
     }
 
     @Test fun mutationsThroughObjectAliasesAreRejected() {
@@ -535,8 +550,8 @@ class PlayerProgramTest {
     }
 
     @Test fun unsupportedOperationsNeverBecomeSuccessFallbacks() {
-        assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/a/g,'b')}catch(e){return x}") }
-        assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/a/g,'b')}finally{return x}") }
+        assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/(a)\\1/g,'b')}catch(e){return x}") }
+        assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/(a)\\1/g,'b')}finally{return x}") }
         assertFailsWith<UnsupportedPlayerException> { compile("return missing(x);") }
         assertFailsWith<UnsupportedPlayerException> { compile("try{return Math.random()+x}catch(e){return x}") }
         assertFailsWith<UnsupportedPlayerException> { compile("return typeof new String(x);") }
@@ -588,6 +603,24 @@ class PlayerProgramTest {
         assertEquals("function(){}", compile("return String([function(){}]);").decipherSignature("x"))
         assertEquals("function pow() { [native code] }", compile("return String([Math.pow]);").decipherSignature("x"))
         assertEquals("[object Array]", compile("var a=[1];a.join=null;return String(a);").decipherSignature("x"))
+    }
+
+    @Test fun stringReplaceSupportsSearchesCapturesCallbacksAndReplacementTokens() {
+        assertEquals("aXcabc", compile("return x.replace('b','X');").decipherSignature("abcabc"))
+        assertEquals("1a2b", compile("return x.replace(/([a-z])(\\d)/g,'$2$1');").decipherSignature("a1b2"))
+        assertEquals("a$-bc", compile("return x.replace(/b/,'$$-$&');").decipherSignature("abc"))
+        assertEquals("aXc", compile("var search=[1];search.toString=function(){return 'b'};return x.replace(search,'X');").decipherSignature("abc"))
+        assertEquals("aYc", compile("var replacement={toString:function(){return 'Y'}};return x.replace('b',replacement);").decipherSignature("abc"))
+        assertEquals("0:a1;2:b2;", compile("return x.replace(/([a-z])(\\d)/g,function(m,l,n,i,s){return i+':'+l+n+';'});").decipherSignature("a1b2"))
+        assertEquals("b-a", compile("return x.replace(/a/i,'b');").decipherSignature("a-a"))
+        assertEquals("-a-b-", compile("return x.replace(/(?:)/g,'-');").decipherSignature("ab"))
+        assertFailsWith<UnsupportedPlayerException> { compile("try{return x.replace(/(a)\\1/g,'b')}catch(e){return x}") }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return x.replace(/^a*a*a*a*a*a*a*b$/, 'z');").decipherSignature("a".repeat(16_000) + "c")
+        }
+        assertFailsWith<UnsupportedPlayerException> {
+            compile("return x.replace(/^(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)b$/, 'z');").decipherSignature("a".repeat(16_000) + "c")
+        }
     }
 
     @Test fun nullEqualityAndNumericWhitespaceMatchJavaScript() {

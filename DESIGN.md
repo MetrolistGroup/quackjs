@@ -23,4 +23,34 @@ The runtime lives in commonMain and targets Android, JVM, Linux and iOS. It inde
 
 `nClass` is a URL wrapper in the original player. QuackJS discovers the n-table update and executes that dependency slice, rather than emulating browser URL handling. Hint-free compilation requires unambiguous executable landmarks; unsupported or ambiguous source fails explicitly. Optimized plans retain live mutation guards and interpreter fallbacks, not fixture/player-ID assumptions.
 
+## Bounded string replacement
+
+`String.replace` supports first-match literal searches, callbacks (match, captures,
+UTF-16 offset, original string), and `$$`, `$&`, `` $` ``, `$'`, `$1` through `$99`
+substitutions, including two-digit fallback and unmatched captures. Non-callable
+replacements are stringified once before searching; callback results per call.
+Regex replacement values, callback results, `String(regex)` and array joins use
+the shared bounded string conversion and canonical `gims` flag order.
+
+Regex literals use a common-Kotlin UTF-16 matcher, never the host regex engine.
+Supported: literals, dot, classes/ranges and negation, `^`/`$`, capturing and `(?:)`
+groups, and **one quantifier total**: `*`, `+`, `?` on a character atom, or `?` on a
+group, optionally lazy. Escapes include `dDwWsS`, `nrtvf`, class `b`, `xHH`,
+`uHHHH`, ASCII-letter control escapes, NUL without following digits, and legacy
+identity escapes (including `\A`, excluding `\B`/`\k`). Flags are `gims` only;
+`i` deliberately rejects non-ASCII pattern characters and input rather than
+relying on platform-dependent Unicode folding. Dot/anchors use all four JS line
+terminators. There is no Unicode/code-point mode.
+
+Alternation, backreferences/octal escapes, lookarounds, word boundaries, counted
+repeats, repeated groups other than `?`, multiple quantifiers and other flags fail
+closed. Malformed patterns also throw uncatchable `UnsupportedPlayerException`.
+Patterns are limited to 512 units, 128 instructions, 16 group levels/captures and
+65,536 matches. Parsing, candidate searches, backtracking, capture copies and
+output growth consume the invocation budgets; even quadratic searches abort at
+the step/allocation limits. These restrictions are intentional, not a general JS
+regex implementation. Default Error/TypeError/RangeError stringification fails
+closed rather than returning a generic object tag; explicit own `toString`
+overrides still work.
+
 Verification fixtures and full-player Node/QuickJS oracles are independent of the implementation. [Fixture provenance](fixtures/manifest.json), [verification methodology](docs/verification.md) and [measured benchmarks](docs/benchmark.md) define the evidence and its limits. [InnerTubeX migration](docs/integration.md) covers caller contracts; networking and URL encoding stay outside the core.
