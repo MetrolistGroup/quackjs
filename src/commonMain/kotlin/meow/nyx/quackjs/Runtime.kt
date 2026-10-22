@@ -56,7 +56,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun arrayRange(items: List<Any?>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
     fun string(value: String): String { allocate(value.length); return value }
     private fun number(value: Any?): Double {
-        // Default Function strings cannot parse as numbers; with no own coercion methods this
+        // Default function/regex strings cannot parse as numbers; with no own coercion methods this
         // avoids constructing large join strings without skipping any user code.
         if (value is JsArray && arrayAlwaysCoercesToNaN(value)) return Double.NaN
         val input = primitive(value, PrimitiveHint.NUMBER)
@@ -76,7 +76,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             is JsArray, is JsObject -> ordinaryPrimitive(value, hint)
             is JsDate -> if (hint == PrimitiveHint.NUMBER) value.time else unsupported("Default date coercion is unsupported")
             is JsFunction, is Native -> text(value).also { tick(it.length); allocate(it.length) }
-            is RegexValue -> value.source
+            is RegexValue -> BoundedRegex(this, value.source).literalText()
             else -> value
         } } finally { conversionDepth-- }
     }
@@ -91,7 +91,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         throw JsThrown("Cannot convert object to primitive value")
     }
-    private fun stringValue(value: Any?): String = text(primitive(value, PrimitiveHint.STRING))
+    internal fun stringValue(value: Any?): String = text(primitive(value, PrimitiveHint.STRING))
     private fun arrayAlwaysCoercesToNaN(root: JsArray): Boolean {
         val pending = ArrayDeque<JsArray>()
         val seen = mutableSetOf<JsArray>()
@@ -105,10 +105,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             if (array.fields.containsKey("toString") || array.fields.containsKey("valueOf") || array.fields.containsKey("join")) return false
             tick(array.values.size)
             for (item in array.values) when (item) {
-                is JsFunction, is Native -> hasCallable = true
+                is JsFunction, is Native, is RegexValue -> hasCallable = true
                 is JsArray -> { allocate(1); pending.addLast(item) }
                 is JsObject -> if (item.fields.containsKey("toString") || item.fields.containsKey("valueOf")) return false
-                is JsDate, is RegexValue -> return false
+                is JsDate -> return false
                 is Double -> if (item.isFinite() && (item != floor(item) || abs(item) > 9007199254740991.0)) return false
             }
         }
@@ -326,7 +326,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     private fun copyTemplate(value: Any?): Any? = when (value) {
         is JsArray -> { allocate(value.values.size); JsArray(MutableList(value.values.size) { copyTemplate(value.values[it]) }) }
-        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValuesTo(mutableMapOf()) { copyTemplate(it.value) }) }
+        is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValuesTo(mutableMapOf()) { copyTemplate(it.value) }, value.builtin) }
         is JsFunction -> { allocate(1); JsFunction(value.code, global) }
         else -> value
     }
@@ -514,13 +514,14 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
     val objectToString = Native(functionName = "toString") { _, self, _ ->
+        if (self is JsObject && self.builtin == "Error") unsupported("Default Error string coercion is unsupported")
         if (self is JsObject) "[object ${self.builtin ?: "Object"}]" else unsupported("Unsupported object method receiver")
     }
     val objectValueOf = Native(functionName = "valueOf") { _, self, _ ->
         if (self is JsArray || self is JsObject) self else unsupported("Primitive object boxing is unsupported")
     }
     val arrayMethods = listOf("reverse", "join", "toString", "valueOf", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith { (arrayMethod(it) as Native).named(it) }
-    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith { (stringMethod(it) as Native).named(it) }
+    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "replace", "toString", "valueOf").associateWith { (stringMethod(it) as Native).named(it) }
     private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
         return when (name) {
@@ -678,6 +679,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             val pos = if (a.size < 2 || a[1] === Undefined) if (name == "endsWith") value.length else 0 else r.integer(a[1]).coerceIn(0, value.length)
             when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> r.find(value, search, pos) >= 0 }
         }
+        "replace" -> Native { r, self, a -> r.replace(self, a.getOrElse(0) { Undefined }, a.getOrElse(1) { Undefined }) }
         "toString", "valueOf" -> Native { _, self, _ -> self as? String ?: throw JsThrown("Invalid string method receiver") }
         else -> Undefined
     }
@@ -718,7 +720,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         "Math" -> math
         "Array" -> Native(mapOf("isArray" to Native { _, _, a -> a.firstOrNull() is JsArray }), constructible = true) { r, _, a -> if (a.size == 1 && a[0] is Double) { val n = number(a[0]); if (n != floor(n) || n < 0 || n > 65_536) unsupported("Array size limit exceeded"); r.allocate(n.toInt()); JsArray(MutableList(n.toInt()) { Hole }) } else r.array(a) }
-        "Error", "TypeError", "RangeError" -> Native(constructible = true) { r, _, a -> JsObject(mutableMapOf("name" to name, "message" to if (a.isEmpty() || a[0] === Undefined) "" else r.stringValue(a[0]))) }
+        "Error", "TypeError", "RangeError" -> Native(constructible = true) { r, _, a -> JsObject(mutableMapOf("name" to name, "message" to if (a.isEmpty() || a[0] === Undefined) "" else r.stringValue(a[0])), builtin = "Error") }
         "Object" -> objectConstructor
         else -> Missing
     }
@@ -809,7 +811,7 @@ internal fun index(key: String): Int? { if (key.isEmpty() || key.length > 10 || 
 internal fun text(value: Any?): String = when (value) {
     is String -> value; null -> "null"; Undefined -> "undefined"; is Boolean -> value.toString(); is Int -> value.toString()
     is Double -> when { value.isNaN() -> "NaN"; value == Double.POSITIVE_INFINITY -> "Infinity"; value == Double.NEGATIVE_INFINITY -> "-Infinity"; value == 0.0 -> "0"; abs(value) <= 9007199254740991.0 && value == floor(value) -> value.toLong().toString(); else -> unsupported("Non-integer number string coercion is unsupported") }
-    is RegexValue -> value.source
+    is RegexValue -> unsupported("Regex string coercion requires bounded validation")
     is JsFunction -> value.code.sourceText() ?: unsupported("Function source text is unavailable")
     is Native -> "function ${value.functionName.orEmpty()}() { [native code] }"
     else -> unsupported("Unsupported string coercion")

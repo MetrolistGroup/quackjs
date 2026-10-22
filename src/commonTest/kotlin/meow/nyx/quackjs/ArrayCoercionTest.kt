@@ -73,6 +73,8 @@ class ArrayCoercionTest {
             assertTrue(assertFailsWith<UnsupportedPlayerException> { evaluate(body) }.message!!.contains("limit"))
         }
         assertEquals("NaN", evaluate("return String(Number([function(){/*${"x".repeat(65_536)}*/}]));"))
+        assertEquals("NaN", evaluate("return String(Number([/a|b/]));"))
+        assertEquals("12", evaluate("var a=[/a|b/];a.valueOf=function(){return 12};return String(Number(a));"))
         assertFailsWith<UnsupportedPlayerException> { evaluate("return String(Number([function(){},new Date('1970-01-01T00:00:00Z')]));") }
     }
 }
