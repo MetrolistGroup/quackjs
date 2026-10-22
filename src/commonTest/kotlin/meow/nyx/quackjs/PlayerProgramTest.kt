@@ -653,4 +653,10 @@ class PlayerProgramTest {
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
         assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
     }
+
+    @Test fun numberStaticPropertiesAndIntegerPredicatesMatchEcmaScript() {
+        assertEquals("true:false:false:false:true:false:true:false", compile("return [Number.isInteger(1),Number.isInteger(1.1),Number.isInteger(Infinity),Number.isInteger('1'),Number.isSafeInteger(9007199254740991),Number.isSafeInteger(9007199254740992),Number.isSafeInteger(-9007199254740991),Number.isSafeInteger(true)].join(':');").decipherSignature("x"))
+        assertEquals("true:true:true:true:true", compile("return [Number.MAX_SAFE_INTEGER===9007199254740991,Number.MIN_SAFE_INTEGER===-9007199254740991,Number.EPSILON===2.220446049250313e-16,Number.NaN!==Number.NaN,Number.POSITIVE_INFINITY===1/0].join(':');").decipherSignature("x"))
+        assertEquals("true:true", compile("return [Number.MIN_VALUE>0,Number.MAX_VALUE>1e308].join(':');").decipherSignature("x"))
+    }
 }

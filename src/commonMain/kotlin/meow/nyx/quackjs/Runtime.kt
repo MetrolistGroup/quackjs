@@ -410,8 +410,18 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "fromCharCode" to Native { r, _, a -> r.tick(a.size); r.string(a.map { (r.int(it) and 65535).toChar() }.joinToString("")) }
     )) { r, _, a -> r.string(if (a.isEmpty()) "" else text(a[0])) }
     val numberConstructor = Native(mapOf(
+        "EPSILON" to 2.220446049250313e-16,
+        "MAX_SAFE_INTEGER" to 9007199254740991.0,
+        "MIN_SAFE_INTEGER" to -9007199254740991.0,
+        "MAX_VALUE" to Double.MAX_VALUE,
+        "MIN_VALUE" to Double.MIN_VALUE,
+        "NaN" to Double.NaN,
+        "NEGATIVE_INFINITY" to Double.NEGATIVE_INFINITY,
+        "POSITIVE_INFINITY" to Double.POSITIVE_INFINITY,
         "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
-        "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
+        "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false },
+        "isInteger" to Native { _, _, a -> (a.firstOrNull() as? Double)?.let { it.isFinite() && floor(it) == it } ?: false },
+        "isSafeInteger" to Native { _, _, a -> (a.firstOrNull() as? Double)?.let { it.isFinite() && floor(it) == it && abs(it) <= 9007199254740991.0 } ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
     val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
     val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
