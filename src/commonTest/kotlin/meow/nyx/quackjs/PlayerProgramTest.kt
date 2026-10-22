@@ -463,11 +463,21 @@ class PlayerProgramTest {
         }
     }
 
-    @Test fun implicitObjectEqualityFailsClosed() {
-        for (expression in listOf("x.split('')==x", "x==x.split('')", "[]==0", "[]==false", "({})=='[object Object]'", "(new Date('1970-01-01T00:00:00Z'))==0", "(new Date('1970-01-01T00:00:00Z'))==false")) {
+    @Test fun abstractEqualityUsesPrimitiveConversionForArraysAndPlainObjects() {
+        assertEquals("a,,,b,,,c", compile("return String(x.split(''));").decipherSignature("a,b,c"))
+        assertEquals("yes", compile("return []==''?'yes':'no';").decipherSignature("x"))
+        for (expression in listOf("x.split('')==x", "x==x.split('')")) {
+            assertEquals("a!", compile("return ($expression)?x+'!':x;").decipherSignature("a"), expression)
+        }
+        assertEquals("true:true:true:12:0:NaN:[object Object]", compile("return [ []==0,[]==false,({})=='[object Object]',[1]+[2],[1]-[1],Number({}),String({}) ].join(':');").decipherSignature("x"))
+        assertEquals("[object Object],1,2;v:o;0:0:NaN", compile("var o={};o[[]]='v';o[{}]='o';return [String([{},[1,[2]]]),o['']+':'+o['[object Object]'],Math.floor([])+':'+Math.floor('')+':'+Math.max([1,2])].join(';');").decipherSignature("x"))
+        assertEquals("12:12:12:12:12", compile("var inner=[1];inner.toString=function(){return '12'};return [String(inner),String([inner]),[inner].join('|'),Number([inner]),Number([[inner]])].join(':');").decipherSignature("x"))
+        assertEquals("3:text:2:true:4", compile("var o={valueOf:function(){return 2},toString:function(){return 'text'}},fallback={valueOf:function(){return {}},toString:function(){return '4'}};return [o+1,String(o),Number(o),o=='2',Number(fallback)].join(':');").decipherSignature("x"))
+        assertEquals("caught", compile("var value={toString:function(){return {}},valueOf:function(){return {}}};try{return String(value)}catch(e){return 'caught'}").decipherSignature("x"))
+        assertEquals("true:false:false:false", compile("var a=[];return [a==a,a==[],a==null,a===x].join(':');").decipherSignature("a"))
+        for (expression in listOf("(new Date('1970-01-01T00:00:00Z'))==0", "(new Date('1970-01-01T00:00:00Z'))==false")) {
             assertFailsWith<UnsupportedPlayerException>(expression) { compile("return ($expression)?x+'!':x;") }
         }
-        assertEquals("true:false:false:false", compile("var a=[];return [a==a,a==[],a==null,a===x].join(':');").decipherSignature("a"))
     }
 
     @Test fun nativeMethodsUseTheInvocationReceiver() {
