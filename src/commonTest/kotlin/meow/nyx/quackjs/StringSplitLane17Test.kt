@@ -21,7 +21,7 @@ class StringSplitLane17Test {
         assertEquals(emptyList(), split(runtime(), "", listOf("")).values)
     }
 
-    @Test fun limitsKeepUint32CoercionAndSkipUnusedSeparatorCoercion() {
+    @Test fun limitsKeepUint32Coercion() {
         for (limit in listOf(null, false, "", 0.0, -0.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 4_294_967_296.0)) {
             assertEquals(emptyList(), split(runtime(), "abc", listOf("", limit)).values, "limit=$limit")
         }
@@ -37,7 +37,7 @@ class StringSplitLane17Test {
         assertEquals(emptyList(), split(runtime(), "abc", listOf(JsObject(), 0.0)).values)
         assertEquals(emptyList(), split(runtime(), "abc", listOf("", JsObject())).values)
         assertFailsWith<UnsupportedPlayerException> { split(runtime(), "abc", listOf(RegexValue("/a/"), 0.0)) }
-        assertFailsWith<UnsupportedPlayerException> { split(runtime(), "abc", listOf(JsObject())) }
+        assertEquals<List<Any?>>(listOf("abc"), split(runtime(), "abc", listOf(JsObject())).values)
     }
 
     @Test fun separatorsAndReceiversKeepTheirExistingCoercion() {
