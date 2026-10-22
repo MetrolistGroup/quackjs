@@ -92,18 +92,24 @@ tasks.register<JavaExec>("playerBenchmark") {
     }
 }
 
-tasks.register<JavaExec>("faraday200Verification") {
-    group = "verification"
-    description = "Opt-in offline parity/report for 200 pinned Faraday players (prepare with scripts/faraday-200.mjs)"
-    dependsOn("jvmTestClasses")
-    val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
-    classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
-    mainClass.set("meow.nyx.quackjs.verification.Faraday200VerificationKt")
-    val cache = providers.gradleProperty("faradayCache").orElse(layout.buildDirectory.dir("faraday-200").get().asFile.absolutePath)
-    systemProperty("quackjs.faraday.corpus", layout.projectDirectory.dir("fixtures/faraday-200").asFile.absolutePath)
-    systemProperty("quackjs.faraday.cache", cache.get())
-    systemProperty("quackjs.faraday.report", providers.gradleProperty("faradayReport").orElse("${cache.get()}/jvm-report.json").get())
-    jvmArgs("-Xms256m", "-Xmx2g")
+listOf("faraday200Verification", "faraday200OracleVerification").forEach { taskName ->
+    tasks.register<JavaExec>(taskName) {
+        val oracle = taskName == "faraday200OracleVerification"
+        group = "verification"
+        description = if (oracle) "Opt-in full-source QuickJS vs Node goldens for 200 pinned Faraday players"
+            else "Opt-in offline parity/report for 200 pinned Faraday players (prepare with scripts/faraday-200.mjs)"
+        dependsOn("jvmTestClasses")
+        val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+        classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
+        mainClass.set("meow.nyx.quackjs.verification.Faraday200VerificationKt")
+        val cache = providers.gradleProperty("faradayCache").orElse(layout.buildDirectory.dir("faraday-200").get().asFile.absolutePath)
+        systemProperty("quackjs.faraday.corpus", layout.projectDirectory.dir("fixtures/faraday-200").asFile.absolutePath)
+        systemProperty("quackjs.faraday.cache", cache.get())
+        systemProperty("quackjs.faraday.report", providers.gradleProperty("faradayReport")
+            .orElse("${cache.get()}/${if (oracle) "quickjs" else "jvm"}-report.json").get())
+        systemProperty("quackjs.faraday.oracle", oracle)
+        jvmArgs("-Xms256m", "-Xmx2g")
+    }
 }
 
 tasks.register<JavaExec>("lane32AcceptanceBenchmark") {

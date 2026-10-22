@@ -26,7 +26,9 @@ private val faradayJson = Json { prettyPrint = true }
 fun main() {
     val corpus = Path.of(System.getProperty("quackjs.faraday.corpus", "fixtures/faraday-200"))
     val cache = Path.of(System.getProperty("quackjs.faraday.cache", "build/faraday-200"))
-    val report = Path.of(System.getProperty("quackjs.faraday.report", cache.resolve("jvm-report.json").toString()))
+    val oracleOnly = java.lang.Boolean.getBoolean("quackjs.faraday.oracle")
+    val reportName = if (oracleOnly) "quickjs-report.json" else "jvm-report.json"
+    val report = Path.of(System.getProperty("quackjs.faraday.report", cache.resolve(reportName).toString()))
     val manifestText = Files.readString(corpus.resolve("manifest.json"))
     val manifest = Json.parseToJsonElement(manifestText).jsonObject
     check(manifest.getValue("schemaVersion").jsonPrimitive.int == 1)
@@ -37,12 +39,12 @@ fun main() {
     players.forEach { check(Regex("[a-f0-9]{8}").matches(it.text("id"))) }
 
     // Missing/invalid oracle data is an explicit failure for every player, never a skipped pass.
+    val globals = runCatching { Files.readString(corpus.parent.resolve("oracle-globals.js")) }
     val goldenResult = runCatching {
         val goldens = Json.parseToJsonElement(Files.readString(corpus.resolve("goldens.json"))).jsonObject
         check(goldens.getValue("schemaVersion").jsonPrimitive.int == 1)
         check(goldens.text("manifestSha256") == sha256(manifestText)) { "golden manifest SHA-256 mismatch" }
-        val globals = Files.readString(corpus.parent.resolve("oracle-globals.js"))
-        check(goldens.getValue("oracle").jsonObject.text("globalsSha256") == sha256(globals)) { "oracle globals SHA-256 mismatch" }
+        check(goldens.getValue("oracle").jsonObject.text("globalsSha256") == sha256(globals.getOrThrow())) { "oracle globals SHA-256 mismatch" }
         check(goldens.getValue("players").jsonArray.map { it.jsonObject.text("id") } == players.map { it.text("id") })
         goldens
     }
@@ -59,7 +61,14 @@ fun main() {
             put("updatedAt", Instant.now().toString())
             put("java", System.getProperty("java.runtime.version"))
             put("cache", cache.toAbsolutePath().toString())
-            put("concurrencyPolicy", "first 8 successful distinct primary configs per mode; 4 workers, all 31 cases, 2 passes")
+            put("verification", if (oracleOnly) "quickjs" else "kotlin")
+            if (oracleOnly) {
+                put("engine", "quickjs-kt-jvm:1.0.15")
+                put("oraclePolicy", "2 fresh full-source contexts; first: compiled batch twice, reversed; second: forward")
+                put("limits", "192 MiB native heap, 2 MiB JS stack, 8 MiB thread, 30s per evaluation")
+            } else {
+                put("concurrencyPolicy", "first 8 successful distinct primary configs per mode; 4 workers, all 31 cases, 2 passes")
+            }
             put("completed", statuses.size)
             put("passed", statuses.count { it.text("status") == "pass" })
             put("failed", statuses.count { it.text("status") != "pass" })
@@ -98,10 +107,13 @@ fun main() {
                 check(cases.any { it.kind == "n" && it.input == "KdrqFlzJXl9EcCwlmEy" })
             }
         }
-        val modes = listOf("hinted", "hintFree").associateWith { mode ->
+        val modes = (if (oracleOnly) listOf("quickJs") else listOf("hinted", "hintFree")).associateWith { mode ->
             when {
                 sourceResult.isFailure -> failedMode("source", sourceResult.exceptionOrNull()!!)
                 casesResult.isFailure -> failedMode("oracle", casesResult.exceptionOrNull()!!)
+                oracleOnly -> verifyFaradayOracle(RealPlayer(id, sourceResult.getOrThrow(), globals.getOrThrow(),
+                    player.text("signatureExpression"), player.text("nClass"),
+                    player.getValue("signatureTimestamp").jsonPrimitive.int, casesResult.getOrThrow()))
                 else -> {
                     val configs = concurrentConfigs.getValue(mode)
                     val primary = player.text("configPrimaryHash")
@@ -121,11 +133,11 @@ fun main() {
             modes.forEach { (name, result) -> put(name, result) }
         }
         save()
-        println("${index + 1}/200 $id: hinted=${modes.getValue("hinted").text("status")} hintFree=${modes.getValue("hintFree").text("status")}")
+        println("${index + 1}/200 $id: " + modes.entries.joinToString(" ") { "${it.key}=${it.value.text("status")}" })
     }
     val failed = statuses.count { it.text("status") != "pass" }
-    println("Faraday: ${200 - failed}/200 passed BOTH modes; exhaustive report: ${report.toAbsolutePath()}")
-    check(failed == 0) { "$failed/200 players failed; see $report (hinted and hint-free failures are separate)" }
+    println("Faraday: ${200 - failed}/200 passed ${if (oracleOnly) "QuickJS" else "BOTH modes"}; exhaustive report: ${report.toAbsolutePath()}")
+    check(failed == 0) { "$failed/200 players failed; see $report" }
 }
 
 private fun failedMode(phase: String, failure: Throwable, category: String = phase): JsonObject = buildJsonObject {
@@ -179,6 +191,48 @@ private fun verifyFaradayMode(source: String, player: JsonObject, cases: List<Ch
         put("compile", "pass")
         put("checked", checked)
         put("concurrency", concurrency)
+        put("errors", JsonArray(errors))
+    }
+}
+
+/** No Kotlin transforms: all expectations are the independent, read-only Node goldens. */
+internal fun verifyFaradayOracle(player: RealPlayer): JsonObject {
+    val errors = mutableListOf<JsonObject>()
+    var contexts = 0
+    var checked = 0
+    repeat(2) { context ->
+        var phase = "initialization"
+        try {
+            QuickJsPlayer.open(player).use { js ->
+                contexts++
+                fun compare(cases: List<Challenge>, actual: String) {
+                    checked += cases.size
+                    check(actual == expectedJson(cases)) { "${player.id}: $phase golden mismatch; actual=${actual.take(1000)}" }
+                }
+                if (context == 0) {
+                    phase = "compiled-repeat"
+                    val batch = js.prepareBatch(player.cases)
+                    repeat(2) { compare(player.cases, js.runBatch(batch)) }
+                    phase = "reversed"
+                    compare(player.cases.reversed(), js.solve(player.cases.reversed()))
+                } else {
+                    phase = "fresh-context"
+                    compare(player.cases, js.solve(player.cases))
+                }
+                phase = "disposal"
+            }
+        } catch (failure: Exception) {
+            errors += buildJsonObject {
+                put("context", context)
+                put("phase", phase)
+                put("reason", "${failure.javaClass.simpleName}: ${failure.message}".take(2000))
+            }
+        }
+    }
+    return buildJsonObject {
+        put("status", if (errors.isEmpty() && contexts == 2 && checked == player.cases.size * 4) "pass" else "fail")
+        put("contexts", contexts)
+        put("checked", checked)
         put("errors", JsonArray(errors))
     }
 }

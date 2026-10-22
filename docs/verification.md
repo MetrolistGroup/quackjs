@@ -24,7 +24,7 @@ see [commands, timing boundaries and measured results](benchmark.md).
 
 ## Opt-in Faraday latest-200 cohort
 
-This larger corpus is independent of the five offline fixtures below. It pins
+This larger corpus is independent of the six offline fixtures below. It pins
 [MetrolistGroup/faraday](https://github.com/MetrolistGroup/faraday/tree/882624d59ccd921aa4cbf528e046ae61e137be47)
 commit `882624d59ccd921aa4cbf528e046ae61e137be47`. All 438 registry players are
 validated and have release records. Select the **200 distinct player hashes** by
@@ -61,6 +61,8 @@ node scripts/faraday-200.mjs download
 node scripts/faraday-200.mjs oracle
 # Offline inputs: compile and compare with the independently derived stored outputs.
 ./gradlew --no-daemon --max-workers=2 faraday200Verification --console=plain
+# Opt-in cross-engine check: full original sources in QuickJS, no Kotlin transforms.
+./gradlew --no-daemon --max-workers=2 faraday200OracleVerification --console=plain
 ```
 
 The ~593 MB source cache is ignored at `build/faraday-200/sources`; it is not
@@ -68,8 +70,9 @@ The ~593 MB source cache is ignored at `build/faraday-200/sources`; it is not
 if desired: pass the same absolute directory to Node `--cache=/path/to/cache`
 and Gradle `-PfaradayCache=/path/to/cache`. Node reports default to
 `<cache>/download-report.json` and `<cache>/oracle-report.json`; override with
-`--report=/path/to/report.json`. The JVM report defaults to
-`<cache>/jvm-report.json`; override with `-PfaradayReport=/path/to/report.json`.
+`--report=/path/to/report.json`. The JVM reports default to
+`<cache>/jvm-report.json` and `<cache>/quickjs-report.json`; override each invocation
+with `-PfaradayReport=/path/to/report.json` (use different paths for the two tasks).
 
 The JVM entrypoint loads **one source at a time**, checks its size/hash and
 compiles it separately with hints and without hints. Each successful compilation
@@ -82,6 +85,16 @@ status, the report is updated after each, and any failed mode makes the task
 exit nonzero **after** the complete cohort. JVM/OS termination cannot guarantee
 a complete report; check `completed == 200`. Default `jvmTest` neither downloads
 nor executes this corpus.
+
+`faraday200OracleVerification` reuses that streaming source/hash/golden loader and
+the existing test-only `RealPlayer` exports and `QuickJsPlayer` limits. For each
+player it initializes **two fresh full-source contexts**: the first compares a
+compiled 31-case batch twice and reversed inputs; the second repeats all 31
+forward. That is 124 exact output comparisons per player, **24,800 total**.
+Initialization, missing/non-string/unequal outputs, thrown evaluations and disposal
+failures cannot pass; each player records contexts, comparisons and errors. This
+also checks same-engine reuse without duplicating player transformation logic.
+It has the same exhaustive reporting/nonzero-exit rules as the Kotlin task.
 
 The shared full-player oracle injects only the registry signature export and the
 **original URL-wrapper n export** before the unique `})(_yt_player);` trailer,
@@ -111,11 +124,11 @@ registry/config hashes, count and cohort endpoints. Golden regeneration replaces
 the file only after **all 200** sources and fresh-context oracle checks succeed.
 A missing URL, wrong hash or failing oracle is a failure: do not change variants,
 substitute another player, refresh to a later snapshot or accept new bytes.
-After production runtime fixes merge, rerun the ordinary commands against the
+After any production runtime change, rerun the ordinary commands against the
 **unchanged** manifest/goldens; reuse the source cache. There is no expected-fail
 allowlist or flag that turns known incompatibilities into passes.
 
-### Recorded baseline, 2026-10-22
+### Historical baseline, 2026-10-22
 
 Runtime baseline `1cd3770` includes the regex-after-`else` lexer fix but not the
 subsequent n-transform compatibility fix. The actual network/oracle/JVM run gave:
@@ -142,9 +155,9 @@ ccb8b03c 7460dd14 b9553db2 48ca10b5 82f45653 12502845
 
 The JVM task correctly failed, with all 200 statuses retained. Each mode checked
 16,368 sequential outputs and passed concurrent reuse on eight successful
-players with distinct primary configs (1,984 additional comparisons per mode). These are known
-runtime incompatibilities, not accepted verifier exceptions. This establishes
-**176/200 in both modes**, not 200/200 Kotlin compatibility.
+players with distinct primary configs (1,984 additional comparisons per mode).
+These were runtime incompatibilities, not accepted verifier exceptions. That
+baseline established **176/200 in both modes**, not 200/200 Kotlin compatibility.
 
 Local exhaustive evidence is retained under `/tmp/quackjs-integration/faraday-200/`:
 `download-report.json`, `oracle-generation-report.json`,
@@ -159,11 +172,94 @@ All 117 default JVM tests also passed separately.
 
 This is transform parity for synthetic valid challenges on this exact snapshot,
 not live playback, all input semantics, general JS support or future-player
-compatibility. The 200 IDs may share byte-identical player implementations;
-recency and distinctness are Faraday player hashes, not 200 unique algorithms.
-No QuickJS cross-engine pass was run on this larger corpus. Production remains
-common Kotlin + stdlib only; Node and existing JVM test dependencies are
+compatibility. The cohort has 200 distinct source SHA-256 values and 143 primary configs;
+recency/distinctness refer to Faraday player hashes, not 200 unique algorithms.
+No QuickJS cross-engine pass was run on that historical baseline. Production
+remains common Kotlin + stdlib only; Node and existing JVM test dependencies are
 verification tools, never runtime dependencies.
+
+### Fixed runtime and cross-engine rerun, 2026-10-22
+
+Fresh local run against source base `67d2c396abbcfb638cd86d594df2a2125f067462`,
+after the implicit-array coercion and bounded replacement fixes, with **unchanged
+manifest, shared inputs and goldens**:
+
+| Check | Passed | Failed |
+| --- | ---: | ---: |
+| Cached source bounds + SHA-256 (593,469,875 bytes) | 200 | 0 |
+| Full-source Node, read-only, two fresh contexts | 200 | 0 |
+| JVM hinted compile + exact outputs/repeats/concurrency | 200 | 0 |
+| JVM hint-free compile + exact outputs/repeats/concurrency | 200 | 0 |
+| Full-source QuickJS vs Node goldens, two fresh contexts | 200 | 0 |
+
+Each Kotlin mode made **18,600 sequential comparisons** (200 × 31 × 3 passes),
+plus **1,984 concurrent comparisons** (8 distinct primary configs × 4 workers ×
+2 passes × 31). Node checked 12,400 outputs; QuickJS checked **24,800 outputs in
+400 full-source contexts**. Reports have all 200 statuses, with zero source,
+oracle, compile, parity or landmark failures. This supersedes the historical
+176/200 runtime result; there is no accepted-failure list.
+
+Evidence is local at `/tmp/quackjs-cross-engine-67d2c39/`: `download-report.json`,
+`node-report.json`, `jvm-report.json`, `quickjs-report.json` and corresponding
+logs/exit files. The cache was reused from
+`/mnt/work/projects/quackjs.worktrees/mvk06juv-472fba-1-faraday-200-verification/build/faraday-200`;
+all 200 downloads were cache hits, not fresh network availability checks.
+Node v26.11.1 and Temurin 21.0.12.1 were used. The five Node self-checks,
+six-player read-only oracle and **149 JVM, 134 Android-host, 134 Linux** tests
+passed (no skips). New JVM negatives reject initialization errors and missing,
+null, thrown, unchanged, sentinel or mismatched oracle results.
+
+A follow-up guard checks primitive string types **inside QuickJS before JSON
+serialization**, in both compiled and direct batches. Boxed strings and objects
+with string-returning `toJSON` methods now fail for both transforms. The regression
+failed before the fix; afterward **150 JVM tests** and **200/200 QuickJS players**
+(400 contexts, 24,800 comparisons) passed. Follow-up logs, XML and JSON are under
+`/tmp/quackjs-cross-engine-67d2c39/string-type-review/`. Only malformed n diagnostics
+retain non-string results; no parity check opts out of validation.
+
+### Final typed-runtime integration, 2026-10-22
+
+The final integrated runtime `5e8be67` passed the same unchanged corpus: **200/200
+in both Kotlin modes, 200/200 Node and 200/200 QuickJS**. Fresh suites passed
+**155 JVM, 138 Android-host and 138 Linux tests**, with zero failures or skips.
+The [tracked results](faraday-200-results.json) retain every player status,
+comparison counts, source/tool hashes and report digests. Full local reports are
+`/tmp/quackjs-integration/faraday-200/final-{kotlin,node,quickjs}-report.json`.
+
+All six local Maven publications at test version `0.1.3-pr-verification` passed
+`verify-publication.py`: stdlib-only metadata, source attachments, Java 17
+bytecode and no JS/JNI payload. This was local verification, not a hosted release
+or Apple execution/linking check.
+
+An empty-cache QuickJS run exited **1**, reporting **0 passed / 200 source
+failures**, not skips (`missing-source-report.json`). Reproduce with
+`./gradlew faraday200OracleVerification -PfaradayCache="$(mktemp -d)"`;
+expect a nonzero exit and verify `completed == failed == 200` in the printed
+report path. Existing Node self-checks cover source corruption/hash bounds and
+missing-source exhaustion without golden writes. The runtime remains the bounded
+[dispatcher/replacement subset](../DESIGN.md), including rejection of regex
+backreferences, lookarounds and multiple quantifiers. These are synthetic
+transform comparisons on pinned sources, not live playback or future-JS support.
+
+## CI
+
+[Verification workflow](../.github/workflows/verification.yml) runs the five Node
+self-checks, six-player read-only oracle and JVM/Android-host/Linux suites on
+ordinary pushes/PRs, with JDK 21, Node 26 and Android SDK 37. It has read-only
+GitHub permissions, no playback credentials and no large-corpus download.
+
+Manually dispatch with `faraday200: true` for bounded downloads, read-only Node,
+both Kotlin modes and QuickJS200. Only `.cache/faraday-200/sources` is cached,
+keyed by the exact manifest hash, with no fallback key. Every restored source is
+rehashed. JSON reports from `build/faraday-reports/*.json` are uploaded even on
+failure; failed checks stay failed. Concurrency cancellation, 45/90-minute job
+timeouts and 7/14-day artifact retention bound the runs. Local `actionlint`
+validation and the [hosted offline run](https://github.com/MetrolistGroup/quackjs/actions/runs/39861296194)
+passed, including SDK provisioning, Node oracles and all three platform suites.
+The first setup attempt exposed the retired Android `tools` package; setup now
+requests only `platform-tools` before the pinned platform/build-tools install.
+Large-corpus local evidence is recorded above; manual hosted runs retain their
+own report artifacts. No branch-protection settings were changed.
 
 ## Corpus and provenance
 

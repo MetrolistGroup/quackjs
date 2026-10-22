@@ -1,0 +1,100 @@
+name: Verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      faraday200:
+        description: Download and verify the pinned latest-200 corpus (about 593 MB)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install Android SDK 37
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Node self-checks and six-player read-only oracle
+        run: |
+          node --test scripts/faraday-200.test.mjs
+          node scripts/player-oracle.mjs
+      - name: JVM, Android-host and Linux tests (no corpus download)
+        run: ./gradlew --no-daemon --max-workers=2 jvmTest testAndroidHostTest linuxX64Test --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-test-results
+          path: build/test-results/
+          retention-days: 7
+
+  faraday200:
+    if: github.event_name == 'workflow_dispatch' && inputs.faraday200
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FARADAY_CACHE: ${{ github.workspace }}/.cache/faraday-200
+      FARADAY_REPORTS: ${{ github.workspace }}/build/faraday-reports
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
+        with:
+          # Only 200 bounded sources, never reports or credentials; no fallback keys.
+          path: .cache/faraday-200/sources
+          key: ${{ runner.os }}-faraday-200-${{ hashFiles('fixtures/faraday-200/manifest.json') }}
+      - name: Bounded download and SHA-256 validation
+        run: node scripts/faraday-200.mjs download --cache="$FARADAY_CACHE" --report="$FARADAY_REPORTS/download-report.json"
+      - name: Full-source Node read-only oracle
+        if: ${{ !cancelled() }}
+        run: node scripts/faraday-200.mjs oracle --cache="$FARADAY_CACHE" --report="$FARADAY_REPORTS/node-report.json"
+      - name: Hinted and hint-free Kotlin parity
+        if: ${{ !cancelled() }}
+        run: ./gradlew --no-daemon --max-workers=2 faraday200Verification -PfaradayCache="$FARADAY_CACHE" -PfaradayReport="$FARADAY_REPORTS/jvm-report.json" --console=plain
+      - name: Full-source QuickJS cross-check
+        if: ${{ !cancelled() }}
+        run: ./gradlew --no-daemon --max-workers=2 faraday200OracleVerification -PfaradayCache="$FARADAY_CACHE" -PfaradayReport="$FARADAY_REPORTS/quickjs-report.json" --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faraday200-reports
+          path: build/faraday-reports/*.json
+          retention-days: 14
