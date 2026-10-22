@@ -746,4 +746,9 @@ class PlayerProgramTest {
         assertEquals("-Infinity:NaN:NaN:1", compile("return [Math.log(0),Math.log(-1),Math.sqrt(-1),Math.sign(1/0)].join(':');").decipherSignature("x"))
         assertEquals("true:true:true", compile("return [Math.PI===3.141592653589793,Math.LN2===0.6931471805599453,Math.SQRT2===1.4142135623730951].join(':');").decipherSignature("x"))
     }
+
+    @Test fun math32BitHelpersUseJavaScriptUnsignedConversion() {
+        assertEquals("-5:-2:6:32:31:0:0", compile("return [Math.imul(0xffffffff,5),Math.imul(0x7fffffff,2),Math.imul(3.9,2.9),Math.clz32(0),Math.clz32(1),Math.clz32(-1),Math.clz32(0x80000000)].join(':');").decipherSignature("x"))
+        assertEquals("0:32", compile("return [Math.imul(1/0,NaN),Math.clz32(1/0)].join(':');").decipherSignature("x"))
+    }
 }
