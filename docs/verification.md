@@ -24,7 +24,7 @@ see [commands, timing boundaries and measured results](benchmark.md).
 
 ## Opt-in Faraday latest-200 cohort
 
-This larger corpus is independent of the five offline fixtures below. It pins
+This larger corpus is independent of the six offline fixtures below. It pins
 [MetrolistGroup/faraday](https://github.com/MetrolistGroup/faraday/tree/882624d59ccd921aa4cbf528e046ae61e137be47)
 commit `882624d59ccd921aa4cbf528e046ae61e137be47`. All 438 registry players are
 validated and have release records. Select the **200 distinct player hashes** by
@@ -216,6 +216,20 @@ failed before the fix; afterward **150 JVM tests** and **200/200 QuickJS players
 (400 contexts, 24,800 comparisons) passed. Follow-up logs, XML and JSON are under
 `/tmp/quackjs-cross-engine-67d2c39/string-type-review/`. Only malformed n diagnostics
 retain non-string results; no parity check opts out of validation.
+
+### Final typed-runtime integration, 2026-10-22
+
+The final integrated runtime `5e8be67` passed the same unchanged corpus: **200/200
+in both Kotlin modes, 200/200 Node and 200/200 QuickJS**. Fresh suites passed
+**155 JVM, 138 Android-host and 138 Linux tests**, with zero failures or skips.
+The [tracked results](faraday-200-results.json) retain every player status,
+comparison counts, source/tool hashes and report digests. Full local reports are
+`/tmp/quackjs-integration/faraday-200/final-{kotlin,node,quickjs}-report.json`.
+
+All six local Maven publications at test version `0.1.3-pr-verification` passed
+`verify-publication.py`: stdlib-only metadata, source attachments, Java 17
+bytecode and no JS/JNI payload. This was local verification, not a hosted release
+or Apple execution/linking check.
 
 An empty-cache QuickJS run exited **1**, reporting **0 passed / 200 source
 failures**, not skips (`missing-source-report.json`). Reproduce with
