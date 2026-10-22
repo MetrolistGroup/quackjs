@@ -254,8 +254,12 @@ keyed by the exact manifest hash, with no fallback key. Every restored source is
 rehashed. JSON reports from `build/faraday-reports/*.json` are uploaded even on
 failure; failed checks stay failed. Concurrency cancellation, 45/90-minute job
 timeouts and 7/14-day artifact retention bound the runs. Local `actionlint`
-validation passed; **the workflow itself has not been executed on GitHub**.
-No branch-protection settings were changed.
+validation and the [hosted offline run](https://github.com/MetrolistGroup/quackjs/actions/runs/39861296194)
+passed, including SDK provisioning, Node oracles and all three platform suites.
+The first setup attempt exposed the retired Android `tools` package; setup now
+requests only `platform-tools` before the pinned platform/build-tools install.
+Large-corpus local evidence is recorded above; manual hosted runs retain their
+own report artifacts. No branch-protection settings were changed.
 
 ## Corpus and provenance
 
