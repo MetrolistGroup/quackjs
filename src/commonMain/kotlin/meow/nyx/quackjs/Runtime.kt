@@ -1,5 +1,7 @@
 package meow.nyx.quackjs
 
+import io.github.mgilbir.ecma262.number.toEcmaString
+
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -57,6 +59,72 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun uint(value: Any?): Long { if (value is String) tick(value.length); return meow.nyx.quackjs.uint(value) }
     private fun integer(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.integer(value) }
     private fun relative(value: Any?, length: Int): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.relative(value, length) }
+    private fun parseSource(value: Any?): String = when (value) {
+        is Double -> value.toEcmaString()
+        else -> text(value)
+    }
+    private fun parseInteger(args: List<Any?>): Double {
+        val source = parseSource(args.getOrElse(0) { Undefined }).trimStart(::jsWhitespace)
+        tick(source.length)
+        var cursor = 0
+        var negative = false
+        if (source.getOrNull(cursor) == '+' || source.getOrNull(cursor) == '-') {
+            negative = source[cursor] == '-'
+            cursor++
+        }
+        var radix = int(args.getOrElse(1) { Undefined })
+        if (radix != 0 && radix !in 2..36) return Double.NaN
+        val hasHexPrefix = source.getOrNull(cursor) == '0' && source.getOrNull(cursor + 1)?.lowercaseChar() == 'x'
+        if (radix == 0) radix = if (hasHexPrefix) 16 else 10
+        if (radix == 16 && hasHexPrefix) cursor += 2
+        var result = 0.0
+        var found = false
+        while (cursor < source.length) {
+            val c = source[cursor]
+            val digit = when (c) {
+                in '0'..'9' -> c - '0'
+                in 'a'..'z' -> c - 'a' + 10
+                in 'A'..'Z' -> c - 'A' + 10
+                else -> -1
+            }
+            if (digit < 0 || digit >= radix) break
+            found = true
+            result = result * radix + digit
+            cursor++
+            tick()
+        }
+        if (!found) return Double.NaN
+        return if (negative) -result else result
+    }
+    private fun parseFloating(args: List<Any?>): Double {
+        val source = parseSource(args.getOrElse(0) { Undefined }).trimStart(::jsWhitespace)
+        tick(source.length)
+        var cursor = 0
+        if (source.getOrNull(cursor) == '+' || source.getOrNull(cursor) == '-') cursor++
+        val numberStart = cursor
+        if (source.startsWith("Infinity", cursor)) {
+            val token = source.substring(0, cursor + 8)
+            return when (token) { "-Infinity" -> Double.NEGATIVE_INFINITY; else -> Double.POSITIVE_INFINITY }
+        }
+        var digits = 0
+        while (source.getOrNull(cursor)?.let { it in '0'..'9' } == true) { cursor++; digits++ }
+        if (source.getOrNull(cursor) == '.') {
+            cursor++
+            while (source.getOrNull(cursor)?.let { it in '0'..'9' } == true) { cursor++; digits++ }
+        }
+        if (digits == 0) return Double.NaN
+        val exponentStart = cursor
+        if (source.getOrNull(cursor) == 'e' || source.getOrNull(cursor) == 'E') {
+            cursor++
+            if (source.getOrNull(cursor) == '+' || source.getOrNull(cursor) == '-') cursor++
+            val exponentDigits = cursor
+            while (source.getOrNull(cursor)?.let { it in '0'..'9' } == true) cursor++
+            if (cursor == exponentDigits) cursor = exponentStart
+        }
+        val token = source.substring(0, cursor)
+        if (cursor <= numberStart) return Double.NaN
+        return token.toDoubleOrNull() ?: Double.NaN
+    }
     private fun find(value: String, search: String, from: Int, backwards: Boolean = false): Int {
         tick()
         if (search.isEmpty()) return from
@@ -400,6 +468,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private companion object {
     // Native methods are receiver-driven and immutable; only Runtime and the receiver own state.
     val callMethod = Native { r, self, a -> r.invoke(self, a.getOrElse(0) { Undefined }, a.drop(1)) }
+    val parseIntMethod = Native { r, _, a -> r.parseInteger(a) }
+    val parseFloatMethod = Native { r, _, a -> r.parseFloating(a) }
     val applyMethod = Native { r, self, a ->
         val args = a.getOrNull(1)
         val items = if (args == null || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown("Invalid apply arguments")
@@ -410,6 +480,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "fromCharCode" to Native { r, _, a -> r.tick(a.size); r.string(a.map { (r.int(it) and 65535).toChar() }.joinToString("")) }
     )) { r, _, a -> r.string(if (a.isEmpty()) "" else text(a[0])) }
     val numberConstructor = Native(mapOf(
+        "parseInt" to parseIntMethod,
+        "parseFloat" to parseFloatMethod,
         "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
@@ -597,6 +669,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "undefined" -> Undefined; "NaN" -> Double.NaN; "Infinity" -> Double.POSITIVE_INFINITY
         "String" -> stringConstructor
         "Number" -> numberConstructor
+        "parseInt" -> parseIntMethod
+        "parseFloat" -> parseFloatMethod
         "Date" -> Native(constructible = true, callable = false) { _, _, a ->
             allocate(1)
             val value = a.firstOrNull() as? String ?: unsupported("Only constant ISO dates are supported")

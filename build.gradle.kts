@@ -23,6 +23,9 @@ kotlin {
     // JitPack drops classifiers from source-variant URLs; publish sources as Maven attachments instead.
     withSourcesJar(publish = false)
     sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.mgilbir:ktecma262:0.2.0")
+        }
         commonTest.dependencies { implementation(kotlin("test")) }
         jvmTest {
             dependencies {

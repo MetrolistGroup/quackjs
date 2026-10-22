@@ -653,4 +653,12 @@ class PlayerProgramTest {
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
         assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
     }
+
+    @Test fun parseIntAndParseFloatConsumeJavaScriptNumericPrefixes() {
+        assertEquals("-15|16|5|NaN|-125|1|0|Infinity|NaN", compile("return [parseInt('  -0xFz'),Number.parseInt('0x10'),parseInt('101xx',2),parseInt('10',1),parseFloat(' -1.25e2tail'),parseFloat('1e+'),parseFloat('0x10'),Number.parseFloat('Infinity!'),parseFloat('x')].join('|');").decipherSignature("x"))
+        assertEquals("true", compile("return (1/parseInt('-0')===-(1/0))+'';").decipherSignature("x"))
+        assertEquals("255:255:12", compile("return [parseInt('ff',16),parseInt('0xff',16),parseInt('12px',10)].join(':');").decipherSignature("x"))
+        assertEquals("true|true|true|true|true|true|true|true|5", compile("return [parseInt(1.9)===1,parseFloat(1.25)===1.25,parseInt(1e20)===1e20,parseInt(1.23e20)===1.23e20,parseInt(-1.23e20)===-1.23e20,parseInt(1e21)===1,parseFloat(1e-6)===1e-6,parseFloat(1e-7)===1e-7,parseInt(5e-324)].join('|');").decipherSignature("x"))
+        assertEquals("true|true", compile("return [(1/parseFloat(-0))===(1/0),(1/parseInt(-0))===(1/0)].join('|');").decipherSignature("x"))
+    }
 }
