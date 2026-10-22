@@ -626,6 +626,17 @@ class PlayerProgramTest {
         assertFailsWith<UnsupportedPlayerException> { compile("try{return new Date('1970-01-01T00:00:00Z').getTime()+x}catch(e){return x}") }
     }
 
+    @Test fun mathPowSupportsNTransformDiscoveryAndExecution() {
+        val program = compile(update = "var power=Math.pow(2,3);o.set('n',o.V.n.split('').reverse().join('')+power);")
+        assertEquals("cba8", program.transformN("abc"))
+    }
+
+    @Test fun regexAfterElseRemainsOpaqueDuringPlayerDiscovery() {
+        val nestedPattern = "(".repeat(513) + "a" + ")".repeat(513)
+        val program = compile(extra = "var decoy=function(){if(false){}else /$nestedPattern/.test('a')};")
+        assertEquals("cba", program.decipherSignature("abc"))
+    }
+
     @Test fun closuresThisAndExceptionSemantics() {
         val p = compile("""
             var a=x.split(''), suffix='!';
