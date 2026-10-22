@@ -13,7 +13,10 @@ internal data object Hole
 internal class JsObject(val fields: MutableMap<String, Any?> = mutableMapOf(), val builtin: String? = null)
 internal class JsArray(val values: MutableList<Any?>, val fields: MutableMap<String, Any?> = mutableMapOf())
 internal class JsFunction(val code: FunctionExpr, val env: Env)
-internal class Native(val fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val invoke: (Runtime, Any?, List<Any?>) -> Any?)
+internal class Native(fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val functionName: String? = null, val invoke: (Runtime, Any?, List<Any?>) -> Any?) {
+    val fields = fields.mapValues { (name, value) -> if (value is Native) value.named(name) else value }
+    fun named(name: String): Native = if (functionName != null) this else Native(fields, constructible, callable, name, invoke)
+}
 internal class JsDate(val time: Double)
 internal class JsThrown(val value: Any?) : Exception()
 private data object ReturnedNull
@@ -52,11 +55,85 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     fun array(items: List<Any?>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
     private fun arrayRange(items: List<Any?>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
     fun string(value: String): String { allocate(value.length); return value }
-    private fun number(value: Any?): Double { if (value is String) tick(value.length); return meow.nyx.quackjs.number(value) }
-    private fun int(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.int(value) }
-    private fun uint(value: Any?): Long { if (value is String) tick(value.length); return meow.nyx.quackjs.uint(value) }
-    private fun integer(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.integer(value) }
-    private fun relative(value: Any?, length: Int): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.relative(value, length) }
+    private fun number(value: Any?): Double {
+        // Default Function strings cannot parse as numbers; with no own coercion methods this
+        // avoids constructing large join strings without skipping any user code.
+        if (value is JsArray && arrayAlwaysCoercesToNaN(value)) return Double.NaN
+        val input = primitive(value, PrimitiveHint.NUMBER)
+        if (input is String) tick(input.length)
+        return meow.nyx.quackjs.number(input)
+    }
+    private fun int(value: Any?): Int = meow.nyx.quackjs.int(number(value))
+    private fun uint(value: Any?): Long = meow.nyx.quackjs.uint(number(value))
+    private fun integer(value: Any?): Int = meow.nyx.quackjs.integer(number(value))
+    private fun relative(value: Any?, length: Int): Int = meow.nyx.quackjs.relative(number(value), length)
+    private enum class PrimitiveHint { DEFAULT, NUMBER, STRING }
+    private var conversionDepth = 0
+    private val joiningArrays = mutableSetOf<JsArray>()
+    private fun primitive(value: Any?, hint: PrimitiveHint = PrimitiveHint.DEFAULT): Any? {
+        if (++conversionDepth > 64) unsupported("Primitive conversion depth limit exceeded")
+        try { return when (value) {
+            is JsArray, is JsObject -> ordinaryPrimitive(value, hint)
+            is JsDate -> if (hint == PrimitiveHint.NUMBER) value.time else unsupported("Default date coercion is unsupported")
+            is JsFunction, is Native -> text(value).also { tick(it.length); allocate(it.length) }
+            is RegexValue -> value.source
+            else -> value
+        } } finally { conversionDepth-- }
+    }
+    private fun ordinaryPrimitive(value: Any, hint: PrimitiveHint): Any? {
+        val names = if (hint == PrimitiveHint.STRING) arrayOf("toString", "valueOf") else arrayOf("valueOf", "toString")
+        for (name in names) {
+            // Look up each method only after the preceding method's side effects.
+            val method = get(value, name)
+            if (!callable(method)) continue
+            val result = invoke(method, value, emptyList())
+            if (!isRuntimeObject(result)) return result
+        }
+        throw JsThrown("Cannot convert object to primitive value")
+    }
+    private fun stringValue(value: Any?): String = text(primitive(value, PrimitiveHint.STRING))
+    private fun arrayAlwaysCoercesToNaN(root: JsArray): Boolean {
+        val pending = ArrayDeque<JsArray>()
+        val seen = mutableSetOf<JsArray>()
+        pending.addLast(root)
+        var hasCallable = false
+        while (pending.isNotEmpty()) {
+            val array = pending.removeLast()
+            tick()
+            if (!seen.add(array)) continue
+            allocate(1)
+            if (array.fields.containsKey("toString") || array.fields.containsKey("valueOf") || array.fields.containsKey("join")) return false
+            tick(array.values.size)
+            for (item in array.values) when (item) {
+                is JsFunction, is Native -> hasCallable = true
+                is JsArray -> { allocate(1); pending.addLast(item) }
+                is JsObject -> if (item.fields.containsKey("toString") || item.fields.containsKey("valueOf")) return false
+                is JsDate, is RegexValue -> return false
+                is Double -> if (item.isFinite() && (item != floor(item) || abs(item) > 9007199254740991.0)) return false
+            }
+        }
+        return hasCallable
+    }
+    private fun joinArray(array: JsArray, separatorValue: Any? = Undefined): String {
+        val length = array.values.size
+        val separator = if (separatorValue === Undefined) "," else stringValue(separatorValue)
+        if (!joiningArrays.add(array)) return ""
+        try {
+            tick(length)
+            val result = StringBuilder()
+            for (i in 0 until length) {
+                val item = array.values.getOrElse(i) { Undefined }
+                val part = if (item == null || item === Undefined || item === Hole) "" else stringValue(item)
+                if (result.length.toLong() + part.length + (if (i == 0) 0 else separator.length) > 65_536) unsupported("String size limit exceeded")
+                if (i > 0) result.append(separator)
+                result.append(part)
+            }
+            return string(result.toString())
+        } finally { joiningArrays.remove(array) }
+    }
+    private fun callable(value: Any?): Boolean = value is JsFunction || value is Native && value.callable
+    private fun isRuntimeObject(value: Any?): Boolean =
+        value is JsArray || value is JsObject || value is JsFunction || value is Native || value is JsDate || value is RegexValue
     private fun find(value: String, search: String, from: Int, backwards: Boolean = false): Int {
         tick()
         if (search.isEmpty()) return from
@@ -91,7 +168,11 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         global.values[name]?.let { return it }
         if (global.values.containsKey(name)) return global.values[name]
         val builtin = builtin(name)
-        if (builtin !== Missing) { global.values[name] = builtin; return builtin }
+        if (builtin !== Missing) {
+            val value = if (builtin is Native) builtin.named(name) else builtin
+            global.values[name] = value
+            return value
+        }
         if (!resolving.add(name)) unsupported("Circular initializer '$name'")
         if (resolving.size > 64 || parsed.size + definitions.size > 512) unsupported("Dependency limit exceeded")
         try {
@@ -375,7 +456,14 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             "name", "prototype", "constructor", "bind", "caller", "arguments", "toString", "valueOf" -> unsupported("Unsupported function property '$key'")
             else -> Undefined
         }
-        if (obj is JsObject) return obj.fields[key] ?: if (obj.fields.containsKey(key)) null else if (obj.builtin != null) unsupported("Unsupported ${obj.builtin}.$key") else Undefined
+        if (obj is JsObject) {
+            if (obj.fields.containsKey(key)) return obj.fields[key]
+            return when (key) {
+                "toString" -> objectToString
+                "valueOf" -> objectValueOf
+                else -> if (obj.builtin != null) unsupported("Unsupported ${obj.builtin}.$key") else Undefined
+            }
+        }
         if (obj is JsArray) {
             if (key == "length") return obj.values.size.toDouble()
             index(key)?.let { return obj.values.getOrElse(it) { Undefined }.let { item -> if (item === Hole) Undefined else item } }
@@ -387,7 +475,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             index(key)?.let { return if (it < obj.length) obj[it].toString() else Undefined }
             return stringMethods[key] ?: Undefined
         }
-        if (key == "toString" && (obj is Double || obj is Int || obj is Boolean)) return Native { r, self, a ->
+        if (key == "toString" && (obj is Double || obj is Int || obj is Boolean)) return Native(functionName = "toString") { r, self, a ->
             if (obj is Boolean && self !is Boolean || obj !is Boolean && self !is Double && self !is Int) throw JsThrown("Invalid primitive method receiver")
             if (a.isNotEmpty() && r.number(a[0]) != 10.0) unsupported("Unsupported number radix")
             text(self)
@@ -399,8 +487,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     private companion object {
     // Native methods are receiver-driven and immutable; only Runtime and the receiver own state.
-    val callMethod = Native { r, self, a -> r.invoke(self, a.getOrElse(0) { Undefined }, a.drop(1)) }
-    val applyMethod = Native { r, self, a ->
+    val callMethod = Native(functionName = "call") { r, self, a -> r.invoke(self, a.getOrElse(0) { Undefined }, a.drop(1)) }
+    val applyMethod = Native(functionName = "apply") { r, self, a ->
         val args = a.getOrNull(1)
         val items = if (args == null || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown("Invalid apply arguments")
         r.tick(items.size); r.allocate(items.size)
@@ -408,31 +496,33 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     val stringConstructor = Native(mapOf(
         "fromCharCode" to Native { r, _, a -> r.tick(a.size); r.string(a.map { (r.int(it) and 65535).toChar() }.joinToString("")) }
-    )) { r, _, a -> r.string(if (a.isEmpty()) "" else text(a[0])) }
+    )) { r, _, a -> r.string(if (a.isEmpty()) "" else r.stringValue(a[0])) }
     val numberConstructor = Native(mapOf(
         "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
-    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
-    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
+    val objectToString = Native(functionName = "toString") { _, self, _ ->
+        if (self is JsObject) "[object ${self.builtin ?: "Object"}]" else unsupported("Unsupported object method receiver")
+    }
+    val objectValueOf = Native(functionName = "valueOf") { _, self, _ ->
+        if (self is JsArray || self is JsObject) self else unsupported("Primitive object boxing is unsupported")
+    }
+    val arrayMethods = listOf("reverse", "join", "toString", "valueOf", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith { (arrayMethod(it) as Native).named(it) }
+    val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith { (stringMethod(it) as Native).named(it) }
     private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
         return when (name) {
             "reverse" -> Native { r, self, _ -> val target = self as? JsArray ?: unsupported("Unsupported array method receiver"); r.tick(target.values.size); target.values.reverse(); target }
-            "join", "toString" -> Native { r, self, a ->
-                val v = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
-                r.tick(v.size)
-                val sep = if (name == "toString" || a.isEmpty() || a[0] === Undefined) "," else text(a[0])
-                val result = StringBuilder()
-                for (i in v.indices) {
-                    val item = v[i]
-                    val part = if (item == null || item === Undefined || item === Hole) "" else text(item)
-                    if (result.length.toLong() + part.length + (if (i == 0) 0 else sep.length) > 65_536) unsupported("String size limit exceeded")
-                    if (i > 0) result.append(sep)
-                    result.append(part)
-                }
-                r.string(result.toString())
+            "join" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                r.joinArray(target, a.getOrElse(0) { Undefined })
             }
+            "toString" -> Native { r, self, _ ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val join = r.get(target, "join")
+                if (r.callable(join)) r.invoke(join, target, emptyList()) else "[object Array]"
+            }
+            "valueOf" -> objectValueOf
             "push" -> Native { r, self, a -> val v = arrayValues(self); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); v.size.toDouble() }
             "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); v.size.toDouble() }
             "pop" -> Native { _, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
@@ -586,7 +676,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "<<" -> (int(left) shl (int(right) and 31)).toDouble(); ">>" -> (int(left) shr (int(right) and 31)).toDouble(); ">>>" -> (int(left).toUInt() shr (int(right) and 31)).toDouble()
         "==" -> equal(left, right, false); "!=" -> !equal(left, right, false); "===" -> equal(left, right, true); "!==" -> !equal(left, right, true)
         "<", ">", "<=", ">=" -> {
-            val a = primitive(left); val b = primitive(right)
+            val a = primitive(left, PrimitiveHint.NUMBER); val b = primitive(right, PrimitiveHint.NUMBER)
             if (a is String && b is String) { tick(minOf(a.length, b.length)); when (op) { "<" -> a < b; ">" -> a > b; "<=" -> a <= b; else -> a >= b } }
             else { val x = number(a); val y = number(b); when (op) { "<" -> x < y; ">" -> x > y; "<=" -> x <= y; else -> x >= y } }
         }
@@ -656,7 +746,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     },
                 "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
                 "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY },
-            ),
+            ).mapValuesTo(mutableMapOf()) { (name, value) -> if (value is Native) value.named(name) else value },
             "Math",
         )
     private data object Missing
@@ -696,6 +786,8 @@ internal fun text(value: Any?): String = when (value) {
     is String -> value; null -> "null"; Undefined -> "undefined"; is Boolean -> value.toString(); is Int -> value.toString()
     is Double -> when { value.isNaN() -> "NaN"; value == Double.POSITIVE_INFINITY -> "Infinity"; value == Double.NEGATIVE_INFINITY -> "-Infinity"; value == 0.0 -> "0"; abs(value) <= 9007199254740991.0 && value == floor(value) -> value.toLong().toString(); else -> unsupported("Non-integer number string coercion is unsupported") }
     is RegexValue -> value.source
+    is JsFunction -> value.code.sourceText() ?: unsupported("Function source text is unavailable")
+    is Native -> "function ${value.functionName.orEmpty()}() { [native code] }"
     else -> unsupported("Unsupported string coercion")
 }
 internal fun equal(a: Any?, b: Any?, strict: Boolean): Boolean {

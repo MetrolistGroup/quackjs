@@ -45,7 +45,7 @@ public class PlayerProgram private constructor(
             val derived = hints ?: derive(playerJs)
             val source = SourceIndex(playerJs, derived.nClass)
             if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
-            val signature = Parser(Lexer(derived.signatureExpression).tokens()).completeExpression()
+            val signature = Parser(Lexer(derived.signatureExpression).tokens(), derived.signatureExpression).completeExpression()
             validateSignatureExpression(signature)
             val runtime = Runtime(source, recordDispatch = true)
             try {

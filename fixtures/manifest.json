@@ -72,6 +72,18 @@
       "capturedAt": "2026-10-22T08:34:47Z",
       "registry": "landmark-discovery",
       "reason": "Metrolist RC3 WEB_REMIX regression, issue 816: n isolation requires Math.pow; hints derived from this full player."
+    },
+    {
+      "id": "60869856",
+      "file": "60869856.js.gz",
+      "url": "https://www.youtube.com/s/player/60869856/player_ias.vflset/en_GB/base.js",
+      "sha256": "380f0e88b7e8f72ef33d7686cee154442ba4a6d395c1f217f607a3bf82fb94bb",
+      "bytes": 2946701,
+      "signatureExpression": "xD(28,4062,INPUT)",
+      "nClass": "n7",
+      "signatureTimestamp": 20690,
+      "registry": "public",
+      "reason": "representative public registry player at timestamp 20690"
     }
   ]
 }

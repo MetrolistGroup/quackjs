@@ -145,7 +145,19 @@ internal data class Call(val fn: Expr, val args: List<Expr>, val construct: Bool
 internal data class Update(val op: String, val target: Expr, val prefix: Boolean) : Expr
 internal data class ArrayExpr(val items: List<Expr>) : Expr
 internal data class ObjectExpr(val items: List<Pair<String, Expr>>) : Expr
-internal class FunctionExpr(val params: List<String>, val body: Block, val name: String? = null) : Expr {
+internal class FunctionExpr(
+    val params: List<String>,
+    val body: Block,
+    val name: String? = null,
+    private val source: String? = null,
+    private val sourceStart: Int = -1,
+    private val sourceEnd: Int = -1,
+) : Expr {
+    fun sourceText(): String? {
+        if (source == null || sourceStart < 0 || sourceEnd !in sourceStart..source.length) return null
+        if (sourceEnd - sourceStart > 65_536) unsupported("Function string size limit exceeded")
+        return source.substring(sourceStart, sourceEnd)
+    }
     val slots: Map<String, Int>
     val parameterSlots: IntArray
     val thisSlot: Int
@@ -202,7 +214,7 @@ internal data class TryStmt(val body: Stmt, val catchName: String?, val handler:
 internal data class SwitchStmt(val expr: Expr, val cases: List<Pair<Expr?, List<Stmt>>>) : Stmt
 internal data object EmptyStmt : Stmt
 
-internal class Parser(private val tokens: List<Token>) {
+internal class Parser(private val tokens: List<Token>, private val source: String? = null) {
     private var p = 0
     private var depth = 0
     private val t get() = tokens[p].text
@@ -281,12 +293,16 @@ internal class Parser(private val tokens: List<Token>) {
                 ObjectExpr(items)
             }
             "function" -> {
+                val start = token.offset
                 val name = if (t != "(") identifier() else null
                 expect("("); val params = mutableListOf<String>()
                 while (!accept(")")) {
                     params.add(identifier()); if (!accept(",")) { expect(")"); break }
                 }
-                FunctionExpr(params, block(), name)
+                val body = block()
+                val endToken = tokens[p - 1]
+                val end = endToken.offset + endToken.text.length
+                FunctionExpr(params, body, name, source, start, end)
             }
             "true" -> Lit(true); "false" -> Lit(false); "null" -> Lit(null)
             else -> {

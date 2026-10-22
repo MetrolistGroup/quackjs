@@ -8,7 +8,7 @@
 ```
 
 Both tasks are opt-in, use JVM test-only dependencies and reject `-PoracleOnly`.
-They verify the four full-player golden suites against Kotlin and QuickJS before
+They verify all six full-player golden suites against Kotlin and QuickJS before
 measurement, then compare every timed sample's complete output outside the timer.
 A mismatch aborts the run. Neither implementation caches challenge outputs.
 See [oracle methodology and corpus provenance](verification.md).
@@ -83,9 +83,9 @@ sequence in each run.
 | 5008be0a | 108.462 / 259.651 | 112.073 / 261.753 | 30.269 / 38.630 | 31.140 / 39.294 |
 
 Cold preparation is **2.3–2.5× faster**. Warm mixed-batch latency is **20–27% lower**
-(approximately **1.25–1.37× throughput**) on all four players in both runs. This
-is limited to this four-player dispatcher/table corpus, not proof of a universal
-advantage or a guarantee for every individual signature/n length or platform.
+(approximately **1.25–1.37× throughput**) on the original four players in both
+runs. The benchmark now validates and measures six players; the historical
+measurements do not establish performance on the added player or every platform.
 
 ### JVM allocation and unseen-input acceptance
 

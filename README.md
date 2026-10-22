@@ -46,7 +46,7 @@ throw `UnsupportedPlayerException`; fail closed, never return an encrypted URL a
 if deciphering succeeded. Limits include 8 Mi UTF-16 source units, 16,384-unit
 challenges and 65,536-unit outputs, not a hard wall-clock deadline.
 
-Verification covers five complete players, not every historical/future player.
+Verification covers six complete players, not every historical/future player.
 Live playback, Android hardware and Apple execution/final linking are unverified.
 See [verification](docs/verification.md), [measured benchmarks](docs/benchmark.md),
 [architecture](DESIGN.md) and [fixture provenance](fixtures/manifest.json).

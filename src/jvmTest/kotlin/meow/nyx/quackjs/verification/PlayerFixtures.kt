@@ -3,6 +3,7 @@ package meow.nyx.quackjs.verification
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -44,6 +45,14 @@ internal object PlayerFixtures {
     fun load(): List<RealPlayer> {
         val directory = Path.of(System.getProperty("quackjs.fixtures", "fixtures"))
         fun read(name: String) = Files.readString(directory.resolve(name))
+        fun readPlayer(name: String): String {
+            val path = directory.resolve(name)
+            return if (name.endsWith(".gz")) {
+                GZIPInputStream(Files.newInputStream(path)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                Files.readString(path)
+            }
+        }
         val manifest = Json.parseToJsonElement(read("manifest.json")).jsonObject
         val goldens = Json.parseToJsonElement(read("goldens.json")).jsonObject
         check(manifest.getValue("schemaVersion").jsonPrimitive.int == 1)
@@ -54,7 +63,7 @@ internal object PlayerFixtures {
         val players = manifest.getValue("players").jsonArray.map { value ->
             val player = value.jsonObject
             val id = player.text("id")
-            val source = read(player.text("file"))
+            val source = readPlayer(player.text("file"))
             check(source.toByteArray(Charsets.UTF_8).size == player.getValue("bytes").jsonPrimitive.int) { "$id: size mismatch" }
             check(sha256(source) == player.text("sha256")) { "$id: player SHA-256 mismatch" }
             val golden = expected.getValue(id)
