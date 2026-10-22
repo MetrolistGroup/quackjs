@@ -740,4 +740,10 @@ class PlayerProgramTest {
         assertEquals("true:true", compile("return [Math.round(4503599627370495)===4503599627370495,Math.round(4503599627370496)===4503599627370496].join(':');").decipherSignature("x"))
         assertEquals("true", compile("return (1/Math.round(-0)===-(1/0))+'';").decipherSignature("x"))
     }
+
+    @Test fun mathTranscendentalsAndConstantsFollowEcmaScript() {
+        assertEquals("0:3:2:1:-1:0:-Infinity", compile("return [Math.log(1),Math.log2(8),Math.sqrt(4),Math.exp(0),Math.sign(-3),Math.sign(0),1/Math.sign(-0)].join(':');").decipherSignature("x"))
+        assertEquals("-Infinity:NaN:NaN:1", compile("return [Math.log(0),Math.log(-1),Math.sqrt(-1),Math.sign(1/0)].join(':');").decipherSignature("x"))
+        assertEquals("true:true:true", compile("return [Math.PI===3.141592653589793,Math.LN2===0.6931471805599453,Math.SQRT2===1.4142135623730951].join(':');").decipherSignature("x"))
+    }
 }
