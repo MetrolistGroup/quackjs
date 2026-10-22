@@ -653,4 +653,13 @@ class PlayerProgramTest {
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
         assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
     }
+
+    @Test fun objectEnumerationMethodsFollowOwnPropertyOrder() {
+        assertEquals("2,10,z,a", compile("return Object.keys({z:1,10:'ten',2:'two',a:3}).join(',');").decipherSignature("x"))
+        assertEquals("two|ten|1|3", compile("return Object.values({z:1,10:'ten',2:'two',a:3}).join('|');").decipherSignature("x"))
+        assertEquals("2:two:10:ten:a:3", compile("var entries=Object.entries({a:3,10:'ten',2:'two'});return entries[0][0]+':'+entries[0][1]+':'+entries[1][0]+':'+entries[1][1]+':'+entries[2][0]+':'+entries[2][1];").decipherSignature("x"))
+        assertEquals("0,1,2|c,a,t|", compile("return Object.keys('cat').join(',')+'|'+Object.values('cat').join(',')+'|'+Object.keys(7).join(',');").decipherSignature("x"))
+        assertEquals("0", compile("return Object.keys(Math).length+'';").decipherSignature("x"))
+        assertEquals("caught", compile("try{Object.keys(null)}catch(e){return 'caught'}return x;").decipherSignature("input"))
+    }
 }

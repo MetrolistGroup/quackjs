@@ -6,6 +6,7 @@ import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.log2
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 internal data object Undefined
@@ -609,56 +610,65 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         else -> Missing
     }
     private val objectConstructor get() = Native(mapOf(
-        "assign" to Native { r, _, a -> val target = a.firstOrNull() as? JsObject ?: unsupported("Unsupported Object.assign target"); a.drop(1).forEach { obj -> if (obj is JsObject) obj.fields.forEach { (k, v) -> r.set(target, k, v) } else if (obj != null && obj !== Undefined) unsupported("Unsupported Object.assign source") }; target }
+        "assign" to Native { r, _, a -> val target = a.firstOrNull() as? JsObject ?: unsupported("Unsupported Object.assign target"); a.drop(1).forEach { obj -> if (obj is JsObject) obj.fields.forEach { (k, v) -> r.set(target, k, v) } else if (obj != null && obj !== Undefined) unsupported("Unsupported Object.assign source") }; target },
+        "keys" to Native { r, _, a -> r.array(r.ownEnumerableProperties(a.getOrElse(0) { Undefined }).map { it.first }) },
+        "values" to Native { r, _, a -> r.array(r.ownEnumerableProperties(a.getOrElse(0) { Undefined }).map { it.second }) },
+        "entries" to Native { r, _, a ->
+            val properties = r.ownEnumerableProperties(a.getOrElse(0) { Undefined })
+            r.array(properties.map { (key, value) -> r.array(listOf(key, value)) })
+        }
     ), constructible = true) { _, _, a ->
         val value = a.firstOrNull()
         if (value == null || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
     }
-    private val math get() =
-        JsObject(
-            mutableMapOf(
-                "E" to 2.718281828459045,
-                "LN10" to 2.302585092994046,
-                "LN2" to 0.6931471805599453,
-                "LOG10E" to 0.4342944819032518,
-                "LOG2E" to 1.4426950408889634,
-                "PI" to 3.141592653589793,
-                "SQRT1_2" to 0.7071067811865476,
-                "SQRT2" to 1.4142135623730951,
-                "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
-                "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
-                "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
-                "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
-                "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
-                "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
-                "sign" to
-                    Native { r, _, a ->
-                        val n = r.number(a.getOrElse(0) { Undefined })
-                        if (n.isNaN() ||
-                            n == 0.0
-                        ) {
-                            n
-                        } else if (n < 0.0) {
-                            -1.0
-                        } else {
-                            1.0
-                        }
-                    },
-                "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
-                "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
-                "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
-                "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
-                "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
-                "trunc" to
-                    Native { _, _, a ->
-                        val n = number(a.getOrElse(0) { Undefined })
-                        if (n < 0) ceil(n) else floor(n)
-                    },
-                "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
-                "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY },
-            ),
-            "Math",
-        )
+    private fun ownEnumerableProperties(value: Any?): List<Pair<String, Any?>> {
+        if (value == null || value === Undefined) throw JsThrown("Cannot convert undefined or null to object")
+        val properties = linkedMapOf<String, Any?>()
+        when (value) {
+            is JsObject -> if (value.builtin == null) properties.putAll(value.fields)
+            is JsArray -> {
+                value.values.forEachIndexed { index, item -> if (item !== Hole) properties[index.toString()] = item }
+                properties.putAll(value.fields)
+            }
+            is String -> {
+                tick(value.length)
+                value.forEachIndexed { index, char -> properties[index.toString()] = char.toString() }
+            }
+        }
+        val indexed = mutableListOf<Pair<Long, Pair<String, Any?>>>()
+        val strings = mutableListOf<Pair<String, Any?>>()
+        properties.forEach { (key, propertyValue) ->
+            val index = key.toLongOrNull()?.takeIf { it in 0..4_294_967_294L && it.toString() == key }
+            if (index == null) strings.add(key to propertyValue) else indexed.add(index to (key to propertyValue))
+        }
+        tick(properties.size)
+        return indexed.sortedBy { it.first }.map { it.second } + strings
+    }
+    private val math get() = JsObject(mutableMapOf(
+        "E" to 2.718281828459045,
+        "LN10" to 2.302585092994046,
+        "LN2" to 0.6931471805599453,
+        "LOG10E" to 0.4342944819032518,
+        "LOG2E" to 1.4426950408889634,
+        "PI" to 3.141592653589793,
+        "SQRT1_2" to 0.7071067811865476,
+        "SQRT2" to 1.4142135623730951,
+        "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
+        "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
+        "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
+        "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
+        "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
+        "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
+        "sign" to Native { r, _, a -> val n = r.number(a.getOrElse(0) { Undefined }); if (n.isNaN() || n == 0.0) n else if (n < 0.0) -1.0 else 1.0 },
+        "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
+        "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
+        "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
+        "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
+        "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
+        "trunc" to Native { _, _, a -> val n = number(a.getOrElse(0) { Undefined }); if (n < 0) ceil(n) else floor(n) },
+        "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
+        "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY }
+    ), "Math")
     private data object Missing
 }
 
