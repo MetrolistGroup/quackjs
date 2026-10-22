@@ -57,6 +57,22 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun uint(value: Any?): Long { if (value is String) tick(value.length); return meow.nyx.quackjs.uint(value) }
     private fun integer(value: Any?): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.integer(value) }
     private fun relative(value: Any?, length: Int): Int { if (value is String) tick(value.length); return meow.nyx.quackjs.relative(value, length) }
+    private fun sortString(value: Any?, active: MutableSet<JsArray> = mutableSetOf()): String {
+        val array = value as? JsArray ?: return text(value)
+        if (!active.add(array)) return ""
+        try {
+            tick(array.values.size)
+            val result = StringBuilder()
+            for (i in array.values.indices) {
+                if (i > 0) result.append(',')
+                val item = array.values[i]
+                val part = if (item == null || item === Undefined || item === Hole) "" else sortString(item, active)
+                if (result.length.toLong() + part.length > 65_536) unsupported("String size limit exceeded")
+                result.append(part)
+            }
+            return string(result.toString())
+        } finally { active.remove(array) }
+    }
     private fun find(value: String, search: String, from: Int, backwards: Boolean = false): Int {
         tick()
         if (search.isEmpty()) return from
@@ -413,7 +429,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
         "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
     )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
-    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith(::arrayMethod)
+    val arrayMethods = listOf("reverse", "join", "toString", "push", "unshift", "pop", "shift", "slice", "splice", "sort", "forEach", "indexOf").associateWith(::arrayMethod)
     val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "toString", "valueOf").associateWith(::stringMethod)
     private val latin1Characters = Array(256) { it.toChar().toString() }
     private fun arrayMethod(name: String): Any? {
@@ -463,6 +479,33 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     }
                 }
                 removed
+            }
+            "sort" -> Native { r, self, a ->
+                val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
+                val hasComparator = a.isNotEmpty() && a[0] !== Undefined
+                val comparator = a.firstOrNull()
+                if (hasComparator && comparator !is JsFunction && comparator !is Native) throw JsThrown("The comparison function must be either a function or undefined")
+                r.allocate(target.values.size)
+                val values = ArrayList<Any?>(target.values.size)
+                var undefinedCount = 0
+                var holes = 0
+                for (value in target.values) when (value) {
+                    Hole -> holes++
+                    Undefined -> undefinedCount++
+                    else -> values.add(value)
+                }
+                values.sortWith { left, right ->
+                    r.tick()
+                    if (hasComparator) {
+                        val order = r.number(r.invoke(comparator, Undefined, listOf(left, right)))
+                        if (order.isNaN() || order == 0.0) 0 else if (order < 0.0) -1 else 1
+                    } else r.sortString(left).compareTo(r.sortString(right))
+                }
+                var write = 0
+                for (value in values) r.setIndex(target, write++, value)
+                repeat(undefinedCount) { r.setIndex(target, write++, Undefined) }
+                repeat(holes) { r.setIndex(target, write++, Hole) }
+                target
             }
             "forEach" -> Native { r, self, a ->
                 val target = self as? JsArray ?: unsupported("Unsupported array method receiver")

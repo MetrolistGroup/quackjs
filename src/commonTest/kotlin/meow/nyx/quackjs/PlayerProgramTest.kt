@@ -553,6 +553,14 @@ class PlayerProgramTest {
         """.trimIndent()).decipherSignature("x"))
     }
 
+    @Test fun arraySortUsesStableStringOrComparatorOrdering() {
+        assertEquals("10,2,a,b,,", compile("var a=[2,'10',,'b',undefined,'a'];var sorted=a.sort();return a===sorted?sorted.join(','):'wrong';").decipherSignature("x"))
+        assertEquals("1:2:10", compile("return [10,2,1].sort(function(a,b){return a-b;}).join(':');").decipherSignature("x"))
+        assertEquals("b,a", compile("return ['a','b'].sort(function(){return NaN;}).reverse().join(',');").decipherSignature("x"))
+        assertEquals("1,2,3:3", compile("var a=[3,2,1];var sorted=a.sort(function(x,y){a.length=0;return x-y});return sorted.join(',')+':'+a.length;").decipherSignature("x"))
+        assertEquals("caught", compile("try{[2,1].sort(null)}catch(e){return 'caught'}return 'wrong';").decipherSignature("x"))
+    }
+
     @Test fun nullEqualityAndNumericWhitespaceMatchJavaScript() {
         assertEquals("false:false:false:true:false:1:NaN:NaN", compile("return [false==null,0==null,''==null,null==undefined,null===undefined,Number('\\ufeff1'),Number('\\u001c1'),Number('0x\\uff11')].join(':');").decipherSignature("x"))
         assertEquals("1:1:1:1", compile("return [Number('\\u00a01'),Number('\\u16801'),Number('\\u20001'),Number('\\u202f1')].join(':');").decipherSignature("x"))
