@@ -120,7 +120,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
     }
 
     companion object {
-        private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
+        private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
         private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...").groupBy { it[0] }
     }
 }
