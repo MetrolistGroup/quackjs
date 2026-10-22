@@ -653,4 +653,10 @@ class PlayerProgramTest {
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
         assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
     }
+
+    @Test fun mathRoundMatchesEcmaScriptTieAndSignedZeroRules() {
+        assertEquals("NaN:0:1:2:0:-1:-Infinity:Infinity:NaN", compile("return [Math.round(),Math.round(null),Math.round(.5),Math.round(1.5),Math.round(-.5),Math.round(-1.5),1/Math.round(-.1),Math.round(1/0),Math.round(0/0)].join(':');").decipherSignature("x"))
+        assertEquals("true:true", compile("return [Math.round(4503599627370495)===4503599627370495,Math.round(4503599627370496)===4503599627370496].join(':');").decipherSignature("x"))
+        assertEquals("true", compile("return (1/Math.round(-0)===-(1/0))+'';").decipherSignature("x"))
+    }
 }
