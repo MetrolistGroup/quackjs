@@ -2,8 +2,11 @@ package meow.nyx.quackjs
 
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
-import kotlin.math.pow
+import kotlin.math.ln
+import kotlin.math.log2
+import kotlin.math.sqrt
 
 internal data object Undefined
 internal data object Hole
@@ -578,7 +581,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     private fun binary(op: String, left: Any?, right: Any?): Any? = when (op) {
         "+" -> { if (left is JsDate || right is JsDate) unsupported("Default date coercion is unsupported"); val a = primitive(left); val b = primitive(right); if (a is String || b is String) { val x = text(a); val y = text(b); if (handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else number(a) + number(b) }
-        "-" -> number(left) - number(right); "*" -> number(left) * number(right); "/" -> number(left) / number(right); "%" -> number(left) % number(right); "**" -> number(left).pow(number(right))
+        "-" -> number(left) - number(right); "*" -> number(left) * number(right); "/" -> number(left) / number(right); "%" -> number(left) % number(right); "**" -> jsPow(number(left), number(right))
         "^" -> (int(left) xor int(right)).toDouble(); "&" -> (int(left) and int(right)).toDouble(); "|" -> (int(left) or int(right)).toDouble()
         "<<" -> (int(left) shl (int(right) and 31)).toDouble(); ">>" -> (int(left) shr (int(right) and 31)).toDouble(); ">>>" -> (int(left).toUInt() shr (int(right) and 31)).toDouble()
         "==" -> equal(left, right, false); "!=" -> !equal(left, right, false); "===" -> equal(left, right, true); "!==" -> !equal(left, right, true)
@@ -611,14 +614,51 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         val value = a.firstOrNull()
         if (value == null || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
     }
-    private val math get() = JsObject(mutableMapOf(
-        "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
-        "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
-        "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
-        "trunc" to Native { _, _, a -> val n = number(a.getOrElse(0) { Undefined }); if (n < 0) ceil(n) else floor(n) },
-        "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
-        "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY }
-    ), "Math")
+    private val math get() =
+        JsObject(
+            mutableMapOf(
+                "E" to 2.718281828459045,
+                "LN10" to 2.302585092994046,
+                "LN2" to 0.6931471805599453,
+                "LOG10E" to 0.4342944819032518,
+                "LOG2E" to 1.4426950408889634,
+                "PI" to 3.141592653589793,
+                "SQRT1_2" to 0.7071067811865476,
+                "SQRT2" to 1.4142135623730951,
+                "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
+                "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
+                "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
+                "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
+                "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
+                "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
+                "sign" to
+                    Native { r, _, a ->
+                        val n = r.number(a.getOrElse(0) { Undefined })
+                        if (n.isNaN() ||
+                            n == 0.0
+                        ) {
+                            n
+                        } else if (n < 0.0) {
+                            -1.0
+                        } else {
+                            1.0
+                        }
+                    },
+                "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
+                "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
+                "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
+                "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
+                "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
+                "trunc" to
+                    Native { _, _, a ->
+                        val n = number(a.getOrElse(0) { Undefined })
+                        if (n < 0) ceil(n) else floor(n)
+                    },
+                "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
+                "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY },
+            ),
+            "Math",
+        )
     private data object Missing
 }
 

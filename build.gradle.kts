@@ -6,7 +6,7 @@ plugins {
     `maven-publish`
 }
 group = "com.github.MetrolistGroup.quackjs"
-version = providers.gradleProperty("VERSION_NAME").orElse("0.1.0").get()
+version = providers.gradleProperty("VERSION_NAME").orElse("0.1.1").get()
 kotlin {
     android {
         namespace = "meow.nyx.quackjs"

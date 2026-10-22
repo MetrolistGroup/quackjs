@@ -26,7 +26,7 @@ see [commands, timing boundaries and measured results](benchmark.md).
 
 [`fixtures/manifest.json`](../fixtures/manifest.json) pins each complete,
 unmodified `base.js` by HTTPS URL, byte count, SHA-256 and registry hints. Upstream
-[notices](../THIRD_PARTY_NOTICES.md) are retained. Capture date: 2026-10-20 UTC.
+[notices](../THIRD_PARTY_NOTICES.md) are retained. Original capture date: 2026-10-20 UTC; the `55de7e60` regression fixture was added on 2026-10-22 UTC.
 The manifest includes public URLs and hashes for both pinned Faraday registries:
 commits `1fe788e77ef9c67619fd1d890b55497c3fc61964` (415 entries) and
 `060f1916cf5374e794bbad7528de055f47fa85dc` (464 entries).
@@ -37,18 +37,27 @@ commits `1fe788e77ef9c67619fd1d890b55497c3fc61964` (415 entries) and
 | `10733253` | local | `dS(7,2166,INPUT)` | `np` | 20699 |
 | `eb27e5fd` | local, supplied fixture | `Su(11,3932,INPUT)` | `cg` | 20724 |
 | `5008be0a` | public, latest entry | `Gl(17,1452,INPUT)` | `Fl` | 20746 |
+| `55de7e60` | live download, source landmarks | `zl(17,5122,INPUT)` | `Gx` | 20745 |
 
-All four use `player_ias.vflset/en_GB/base.js`; hints are variant-specific. The
-corpus is about 11.7 MB of full players, not extracted lookalikes. Node checks
+All five use `player_ias.vflset/en_GB/base.js`; hints are variant-specific. The
+corpus is about 14.7 MB of full players, not extracted lookalikes. Node checks
 that each player's signature-output and n-output vectors differ from the others.
-These four dispatcher/table players do not establish general JavaScript support
+These five dispatcher/table players do not establish general JavaScript support
 or compatibility with all archived/future players. No credentials, cookies,
 stream URLs or private challenges are used.
+
+The `55de7e60` fixture reproduces [Metrolist issue 816](https://github.com/MetrolistGroup/metrolist-kmp-issues/issues/816):
+its n transform requires `Math.pow`. The regression checks hinted and hint-free
+compilation against the full-player oracle. Common numeric cases and a separate
+QuickJS comparison cover JS rounding ties, signed zeros, NaN/infinity, coercion,
+32-bit multiplication and constants. The runtime also supports `log`, `log2`,
+`sqrt`, `sign`, `clz32` and `exp`. `Math.random` remains unsupported: none of the
+verified transforms requires it; no deterministic substitute is supplied.
 
 ## Independent oracle
 
 [`goldens.json`](../fixtures/goldens.json) contains 16 signature and 15 n cases
-per player: **124 independently derived outputs**. Synthetic inputs include the
+per player: **155 independently derived outputs**. Synthetic inputs include the
 base64url alphabet/reversal, repeated/alternating characters and xorshift32 seed
 `0x51a7c0de`. Signature lengths span 16–255 and n lengths 15–128, including nearby
 boundaries and the Faraday `KdrqFlzJXl9EcCwlmEy` probe. The deterministic generator
@@ -79,7 +88,7 @@ security sandbox**; run the pinned corpus, not arbitrary untrusted scripts.
 
 `PlayerParityTest` compiles each full source with `PlayerHints`, checks its
 timestamp and all stored outputs in forward/reverse/forward order. Additional
-acceptance tests check **112 unseen seeded valid challenges** against full-player
+acceptance tests check **140 unseen seeded valid challenges** against full-player
 QuickJS, repeated/reversed order and shared-program concurrency. Expected values
 come only from the independent engines, never Kotlin. Malformed n comparisons
 are diagnostic, not parity assertions: the URL-wrapper boundary differs from the

@@ -28,7 +28,7 @@ Add QuackJS to `commonMain` in `build.gradle.kts`:
 ```kotlin
 kotlin {
     sourceSets.commonMain.dependencies {
-        implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.0")
+        implementation("com.github.MetrolistGroup.quackjs:quackjs:0.1.1")
     }
 }
 ```
@@ -82,7 +82,7 @@ Using InnerTubeX's wrapper and required SDK/toolchain, run its existing checks:
 ./gradlew desktopTest testAndroidHostTest :harness:test ktlintCheck apiCheck assemble
 ```
 
-Cover all four [pinned players](../fixtures/manifest.json), both hinted and
+Cover all five [pinned players](../fixtures/manifest.json), both hinted and
 hint-free compilation, repeated batches and one-download reuse. Include failed
 preferred downloads/unsupported scripts, supplied-variant fallback, cancellation,
 disposal, malformed challenges, blank/unchanged/thrown results and output encoding.

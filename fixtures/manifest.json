@@ -59,6 +59,19 @@
       "signatureTimestamp": 20746,
       "registry": "public",
       "reason": "Latest public registry entry at capture: Gl(17,1452), Fl URL wrapper; timestamp 20746"
+    },
+    {
+      "id": "55de7e60",
+      "file": "55de7e60.js",
+      "url": "https://www.youtube.com/s/player/55de7e60/player_ias.vflset/en_GB/base.js",
+      "sha256": "14aed3cab58a2ae63e31a4b51b90c98cf393c912dc5f3d176c309106a8c198eb",
+      "bytes": 2969475,
+      "signatureExpression": "zl(17,5122,INPUT)",
+      "nClass": "Gx",
+      "signatureTimestamp": 20745,
+      "capturedAt": "2026-10-22T08:34:47Z",
+      "registry": "landmark-discovery",
+      "reason": "Metrolist RC3 WEB_REMIX regression, issue 816: n isolation requires Math.pow; hints derived from this full player."
     }
   ]
 }
