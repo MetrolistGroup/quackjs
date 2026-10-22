@@ -1,14 +1,13 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class NativeCallbackLane22Test {
     private fun runtime() = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
     private fun expression(source: String) = Parser(Lexer(source).tokens()).completeExpression()
-    private fun run(body: String): Any? = runtime().expression(expression("(function(){$body})()"))
+    private fun run(body: String): JsValue = runtime().expression(expression("(function(){$body})()"))
 
     @Test fun traversalReadsLiveElementsButKeepsTheOriginalLength() {
         assertEquals("a0:b1:C2|abC", run("""
@@ -83,7 +82,7 @@ class NativeCallbackLane22Test {
     @Test fun reusedArgumentsAndFramesKeepTheirExecutionAndAllocationCharges() {
         fun invoke(runtime: Runtime) {
             val callback = runtime.function(expression("function(v,i,a){}") as FunctionExpr)
-            val target = JsArray(mutableListOf("a", "b"))
+            val target = JsArray(mutableListOf(JsString("a"), JsString("b")))
             runtime.invoke(runtime.get(target, "forEach"), target, listOf(callback))
         }
         // Lookup + outer invocation + two visits + preparation + two callback invocations.

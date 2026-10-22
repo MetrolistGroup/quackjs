@@ -1,12 +1,11 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AbstractCoercionTest {
-    private fun evaluate(body: String): Any? {
+    private fun evaluate(body: String): JsValue {
         val source = "function(){$body}"
         val runtime = Runtime(SourceIndex("g.C=function(){};", "C"))
         val code = Parser(Lexer(source).tokens(), source).completeExpression() as FunctionExpr

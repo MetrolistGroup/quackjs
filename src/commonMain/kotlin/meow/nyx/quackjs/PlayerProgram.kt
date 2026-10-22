@@ -11,27 +11,27 @@ public class PlayerProgram private constructor(
     private val signature: Expr,
     private val nPlan: NPlan,
     private val parsed: Map<String, Expr>,
-    private val templates: Map<String, Any?>,
+    private val templates: Map<String, JsValue>,
     private val dates: Map<String, Double>,
     private val dispatch: Map<DispatchKey, Block>,
     private val globalCount: Int,
     public val signatureTimestamp: Int?,
 ) {
     public fun decipherSignature(input: String): String = run(input) { runtime ->
-        runtime.expression(signature, mapOf("INPUT" to input))
+        runtime.expression(signature, mapOf("INPUT" to JsString(input)))
     }
 
     public fun transformN(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
 
-    private inline fun run(input: String, transform: (Runtime) -> Any?): String {
+    private inline fun run(input: String, transform: (Runtime) -> JsValue): String {
         if (input.length > 16_384) unsupported("Challenge length limit exceeded")
         try {
             val output = transform(Runtime(source, parsed, templates, dates, dispatch, globalCount = globalCount).also { it.challenge = input })
-            if (output !is String) unsupported("Transform did not return a string")
-            if (output.length > 65_536) unsupported("Transform output limit exceeded")
-            return output
+            if (output !is JsString) unsupported("Transform did not return a string")
+            if (output.value.length > 65_536) unsupported("Transform output limit exceeded")
+            return output.value
         } catch (error: JsThrown) {
-            unsupported("Transform threw: ${if (error.value is String) error.value.take(160) else "JavaScript exception"}")
+            unsupported("Transform threw: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
         }
     }
 
@@ -50,8 +50,8 @@ public class PlayerProgram private constructor(
             val runtime = Runtime(source, recordDispatch = true)
             try {
                 val plan = discoverN(source, derived.nClass, runtime)
-                val result = runtime.expression(signature, mapOf("INPUT" to "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"))
-                if (result !is String) unsupported("Signature transform did not return a string")
+                val result = runtime.expression(signature, mapOf("INPUT" to JsString("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")))
+                if (result !is JsString) unsupported("Signature transform did not return a string")
                 val parsed = runtime.definitions.toMap()
                 val initializer = Runtime(source)
                 val templates = buildMap {
@@ -59,7 +59,7 @@ public class PlayerProgram private constructor(
                 }
                 val dispatch = runtime.specializedBodies!!.toMap()
                 val globals = parsed.keys.withIndex().associate { it.value to it.index }
-                val pending = ArrayDeque<Any>()
+                val pending = ArrayDeque<SyntaxNode>()
                 pending.addAll(parsed.values)
                 pending.addAll(listOf(signature, plan.function, plan.constructor, plan.setter))
                 pending.addAll(dispatch.values)
@@ -70,7 +70,7 @@ public class PlayerProgram private constructor(
                 }
                 return PlayerProgram(source, signature, plan, parsed, templates, runtime.constantDates.toMap(), dispatch, globals.size, hints?.signatureTimestamp ?: source.signatureTimestamp)
             } catch (error: JsThrown) {
-                unsupported("Player initialization failed: ${if (error.value is String) error.value.take(160) else "JavaScript exception"}")
+                unsupported("Player initialization failed: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
             }
         }
 
@@ -113,7 +113,7 @@ public class PlayerProgram private constructor(
         }
 
         private fun validateSignatureExpression(expr: Expr) {
-            fun argument(e: Expr): Boolean = e == Id("INPUT") || e is Lit && e.value is Double || e is Unary && e.op in setOf("+", "-") && argument(e.expr)
+            fun argument(e: Expr): Boolean = e == Id("INPUT") || e is Lit && e.value is JsNumber || e is Unary && e.op in setOf("+", "-") && argument(e.expr)
             if (expr !is Call || expr.construct || expr.fn !is Id || expr.args.count { it == Id("INPUT") } != 1 || !expr.args.all(::argument)) {
                 unsupported("Signature hint must be a function call with numeric arguments and INPUT")
             }
@@ -126,16 +126,16 @@ private fun templateSafe(expr: Expr): Boolean = when (expr) {
     is Lit, is FunctionExpr -> true
     is ArrayExpr -> expr.items.all(::templateSafe)
     is ObjectExpr -> expr.items.all { templateSafe(it.second) }
-    is Call -> !expr.construct && expr.fn is Member && expr.fn.target is Lit && expr.fn.target.value is String && expr.fn.key == Lit("split") && expr.args.all { it is Lit }
+    is Call -> !expr.construct && expr.fn is Member && expr.fn.target is Lit && expr.fn.target.value is JsString && expr.fn.key == Lit("split") && expr.args.all { it is Lit }
     else -> false
 }
 
 private val RootArgument = Id("<n-root>")
-private fun nArguments(runtime: Runtime, arguments: List<Expr>, root: JsObject): List<Any?> =
+private fun nArguments(runtime: Runtime, arguments: List<Expr>, root: JsObject): List<JsValue> =
     arguments.map { runtime.expression(it, mapOf(RootArgument.name to root)) }
 
 private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, val selfRoot: Boolean, val mapKey: String, val constructor: FunctionExpr, val setter: FunctionExpr) {
-    fun execute(runtime: Runtime, input: String): Any? {
+    fun execute(runtime: Runtime, input: String): JsValue {
         runtime.challenge = input
         val root = makeRoot(runtime, constructor, mapKey, input, setter)
         val args = arguments.map {
@@ -152,11 +152,11 @@ private data class NPlan(val function: FunctionExpr, val arguments: List<Expr>, 
 
 private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String?, input: String, setter: FunctionExpr): JsObject {
     val root = JsObject()
-    runtime.invoke(runtime.function(constructor), root, listOf("", true))
+    runtime.invoke(runtime.function(constructor), root, listOf(JsString(""), JsBoolean(true)))
     root.fields["set"] = runtime.function(setter)
     if (mapKey != null) {
         val map = root.fields[mapKey] as? JsObject ?: unsupported("Unsupported n parameter table")
-        map.fields["n"] = input
+        map.fields["n"] = JsString(input)
     }
     return root
 }
@@ -198,10 +198,10 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             try {
                 runtime.invoke(runtime.function(candidate.function), if (candidate.selfRoot) root else Undefined, args)
                 val result = (root.fields[mapKey] as? JsObject)?.fields?.get("n")
-                if (result is String && result != probe) {
+                if (result is JsString && result.value != probe) {
                     val plan = NPlan(candidate.function, candidate.args, candidate.selfRoot, mapKey, constructor, setter)
                     val second = plan.execute(runtime, "0123456789abcdefghijklmno")
-                    if (second is String && second != "0123456789abcdefghijklmno" && second.length < 256) {
+                    if (second is JsString && second.value != "0123456789abcdefghijklmno" && second.value.length < 256) {
                         if (selected != null) conflicting = true else selected = key to plan
                     }
                 }
@@ -269,10 +269,10 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             boundArgs.forEach(::validateDepth)
             val values = try { nArguments(runtime, boundArgs, cleanRoot) } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
             if (!selfRoot && values.none { it === cleanRoot }) {
-                if (rootTail && values.all { it is Double || it is String || it is Boolean || it === Undefined || it == null }) unresolvedRootCalls--
+                if (rootTail && values.all { it is JsNumber || it is JsString || it is JsBoolean || it === Undefined || it === JsNull }) unresolvedRootCalls--
                 return@walk
             }
-            if (values.any { it !== cleanRoot && it !is Double && it !is String && it !is Boolean && it !== Undefined && it != null }) return@walk
+            if (values.any { it !== cleanRoot && it !is JsNumber && it !is JsString && it !is JsBoolean && it !== Undefined && it !== JsNull }) return@walk
             val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
             if (fn !is JsFunction) return@walk
             for (guard in guards) {
@@ -461,7 +461,7 @@ private fun walkExpression(e: Expr, runtime: Runtime, env: Env, dynamic: Set<Str
         is ObjectExpr -> e.items.forEach { child(it.second) }
         is FunctionExpr -> {
             // A closure can change a substituted outer local before the isolated call.
-            val pending = ArrayDeque<Any>()
+            val pending = ArrayDeque<SyntaxNode>()
             pending.add(e.body)
             while (pending.isNotEmpty()) {
                 val node = pending.removeLast()

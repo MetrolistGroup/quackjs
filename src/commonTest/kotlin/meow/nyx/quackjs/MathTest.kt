@@ -81,8 +81,8 @@ internal val mathCases =
     )
 
 internal fun evaluateMath(expression: String): Double =
-    Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
-        .expression(Parser(Lexer(expression).tokens()).completeExpression()) as Double
+    (Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
+        .expression(Parser(Lexer(expression).tokens()).completeExpression()) as JsNumber).value
 
 internal fun assertMathResult(
     expected: Double,

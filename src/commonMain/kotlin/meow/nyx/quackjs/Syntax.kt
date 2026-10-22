@@ -125,8 +125,13 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
     }
 }
 
-internal sealed interface Expr
-internal data class Lit(val value: Any?) : Expr
+internal sealed interface SyntaxNode
+internal sealed interface Expr : SyntaxNode
+internal data class Lit(val value: JsValue) : Expr {
+    constructor(value: String) : this(JsString(value))
+    constructor(value: Double) : this(JsNumber(value))
+    constructor(value: Boolean) : this(JsBoolean(value))
+}
 internal data class Id(val name: String) : Expr {
     // Bound once by the enclosing function; captured and catch-shadowed names use lexical lookup.
     var slot: Int = -1
@@ -172,7 +177,7 @@ internal class FunctionExpr(
         val catches = mutableSetOf<String>()
         var arguments = false
         var closures = false
-        val pending = ArrayDeque<Any>()
+        val pending = ArrayDeque<SyntaxNode>()
         pending.add(body)
         while (pending.isNotEmpty()) {
             val node = pending.removeLast()
@@ -181,6 +186,7 @@ internal class FunctionExpr(
                 is Vars -> node.items.forEach { names.add(it.first) }
                 is TryStmt -> node.catchName?.let { catches.add(it) }
                 is FunctionExpr -> closures = true
+                else -> Unit
             }
             if (node !is FunctionExpr) syntaxChildren(node) { pending.add(it) }
         }
@@ -199,8 +205,7 @@ internal class FunctionExpr(
         hotCharacterPlan = HotCharacterPlan.compile(this)
     }
 }
-internal data class RegexValue(val source: String)
-internal sealed interface Stmt
+internal sealed interface Stmt : SyntaxNode
 internal data class Block(val statements: List<Stmt>) : Stmt
 internal data class ExpressionStmt(val expr: Expr) : Stmt
 internal data class Vars(val items: List<Pair<String, Expr?>>) : Stmt
@@ -304,7 +309,7 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
                 val end = endToken.offset + endToken.text.length
                 FunctionExpr(params, body, name, source, start, end)
             }
-            "true" -> Lit(true); "false" -> Lit(false); "null" -> Lit(null)
+            "true" -> Lit(true); "false" -> Lit(false); "null" -> Lit(JsNull)
             else -> {
                 if (token.kind != 0 || text.firstOrNull()?.let { it.isLetter() || it == '_' || it == '$' } != true) unsupported("Unsupported expression '$text' at ${token.offset}")
                 Id(text)

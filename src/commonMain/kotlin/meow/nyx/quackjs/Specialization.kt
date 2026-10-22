@@ -7,7 +7,7 @@ internal fun specialize(code: FunctionExpr, first: Double, second: Double, runti
     if (code.usesArguments) return code.body
     val written = mutableSetOf<String>()
     val initialized = mutableMapOf<String, Int>()
-    val pending = ArrayDeque<Any>()
+    val pending = ArrayDeque<SyntaxNode>()
     pending.add(code.body)
     while (pending.isNotEmpty()) {
         val node = pending.removeLast()
@@ -17,6 +17,7 @@ internal fun specialize(code: FunctionExpr, first: Double, second: Double, runti
             is Update -> if (node.target is Id) written.add(node.target.name)
             is Vars -> for ((name, value) in node.items) if (value != null) initialized[name] = (initialized[name] ?: 0) + 1
             is TryStmt -> node.catchName?.let { written.add(it) }
+            else -> Unit
         }
         // A nested closure may write a captured local. Its own names are conservatively excluded too.
         syntaxChildren(node) { pending.add(it) }
@@ -41,7 +42,7 @@ internal fun specialize(code: FunctionExpr, first: Double, second: Double, runti
                 if (left is Lit) {
                     if (expr.op == "&&") return if (truth(left.value)) fold(expr.right) else left
                     if (expr.op == "||") return if (truth(left.value)) left else fold(expr.right)
-                    if (expr.op == "??") return if (left.value == null || left.value === Undefined) fold(expr.right) else left
+                    if (expr.op == "??") return if (left.value === JsNull || left.value === Undefined) fold(expr.right) else left
                 }
                 val right = fold(expr.right)
                 val binary = Binary(expr.op, left, right)
@@ -66,7 +67,7 @@ internal fun specialize(code: FunctionExpr, first: Double, second: Double, runti
         if (stmt !is Vars) break
         prefix[stmt] = Vars(stmt.items.map { (name, expr) ->
             val value = expr?.let(::fold)
-            if (name !in written && value is Lit && (value.value is Double || value.value is Boolean)) constants[name] = value
+            if (name !in written && value is Lit && (value.value is JsNumber || value.value is JsBoolean)) constants[name] = value
             name to value
         })
     }
@@ -90,8 +91,8 @@ internal fun specialize(code: FunctionExpr, first: Double, second: Double, runti
     return statement(code.body) as Block
 }
 
-internal fun syntaxChildren(node: Any, child: (Any) -> Unit) {
-    fun optional(value: Any?) { if (value != null) child(value) }
+internal fun syntaxChildren(node: SyntaxNode, child: (SyntaxNode) -> Unit) {
+    fun optional(value: SyntaxNode?) { if (value != null) child(value) }
     when (node) {
         is Unary -> child(node.expr)
         is Binary -> { child(node.left); child(node.right) }
@@ -112,5 +113,6 @@ internal fun syntaxChildren(node: Any, child: (Any) -> Unit) {
         is Label -> child(node.body)
         is TryStmt -> { child(node.body); optional(node.handler); optional(node.finalizer) }
         is SwitchStmt -> { child(node.expr); node.cases.forEach { (key, statements) -> optional(key); statements.forEach(child) } }
+        is Id, is Lit, is Jump, EmptyStmt -> Unit
     }
 }

@@ -107,7 +107,7 @@ internal val rawLineTerminatorRegexes = listOf("\n", "\r", "\r\n", "\u2028", "\u
 
 internal fun evaluateReplace(body: String, runtime: Runtime = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))): String {
     val fn = runtime.expression(Parser(Lexer("(function(){$body})").tokens()).completeExpression())
-    return runtime.invoke(fn, Undefined, emptyList()) as String
+    return (runtime.invoke(fn, Undefined, emptyList()) as JsString).value
 }
 
 class StringReplaceTest {
@@ -128,7 +128,12 @@ class StringReplaceTest {
         val expression = Parser(Lexer("new Error('oops')").tokens()).completeExpression()
         val template = Runtime(source).expression(expression)
         val runtime = Runtime(source, mapOf("error" to expression), mapOf("error" to template))
-        assertFailsWith<UnsupportedPlayerException> { runtime.replace("x", "x", runtime.resolve("error")) }
+        val copy = runtime.resolve("error") as JsObject
+        kotlin.test.assertNotSame(template, copy)
+        assertEquals("Error", copy.builtin)
+        assertEquals(JsString("Error"), copy.fields["name"])
+        assertEquals(JsString("oops"), copy.fields["message"])
+        assertFailsWith<UnsupportedPlayerException> { runtime.replace(JsString("x"), JsString("x"), copy) }
     }
 
     @Test fun unsupportedAndMalformedPatternsFailClosedThroughCatchAndFinally() {
@@ -177,9 +182,9 @@ class StringReplaceTest {
     @Test fun regexSearchFinishesBeforeCallbacksRun() {
         val runtime = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
         var callbacks = 0
-        val callback = Native { _, _, _ -> callbacks++; "X" }
+        val callback = Native { _, _, _ -> callbacks++; JsString("X") }
         assertFailsWith<UnsupportedPlayerException> {
-            runtime.replace("ab" + "a".repeat(4_000) + "c", RegexValue("/a*ab/g"), callback)
+            runtime.replace(JsString("ab" + "a".repeat(4_000) + "c"), RegexValue("/a*ab/g"), callback)
         }
         assertEquals(0, callbacks)
     }

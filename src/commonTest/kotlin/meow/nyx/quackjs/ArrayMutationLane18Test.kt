@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
@@ -10,7 +9,7 @@ import kotlin.test.assertTrue
 class ArrayMutationLane18Test {
     private fun runtime() = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
     private fun call(runtime: Runtime, target: JsArray, method: String, args: List<Any?> = emptyList()): Any? =
-        runtime.invoke(runtime.get(target, method), target, args)
+        runtime.invoke(runtime.get(target, method), target, args.map(::testJsValue))
 
     private fun positions(size: Int): List<Pair<Any?, Int>> = listOf(
         Undefined to 0, null to 0, Double.NaN to 0, Double.NEGATIVE_INFINITY to 0,
@@ -39,7 +38,7 @@ class ArrayMutationLane18Test {
                         emptyList(), listOf("new"), listOf(null, Undefined), listOf(objectValue, "a", "b", "c"),
                     )
                     for (inserted in insertions) {
-                        val target = JsArray(original.toMutableList(), mutableMapOf("tag" to objectValue))
+                        val target = JsArray(original.map(::testJsValue).toMutableList(), mutableMapOf("tag" to objectValue))
                         val storage = target.values
                         val removed = call(runtime, target, "splice", prefix + countArgs + inserted) as JsArray
                         assertEquals(original.drop(start).take(count), removed.values)
@@ -59,7 +58,7 @@ class ArrayMutationLane18Test {
     @Test fun sliceClampsIndexesAndCopiesHolesWithoutSharingStorage() {
         val runtime = runtime()
         val objectValue = JsObject()
-        val target = JsArray(mutableListOf(Hole, objectValue, Undefined, null, "end"))
+        val target = JsArray(mutableListOf(Hole, objectValue, Undefined, JsNull, JsString("end")))
         val original = target.values.toList()
         val starts = listOf(emptyList<Any?>() to 0) + positions(original.size).map { listOf(it.first) to it.second }
         for ((args, start) in starts) {
@@ -78,7 +77,7 @@ class ArrayMutationLane18Test {
 
     @Test fun unshiftAndShiftKeepOrderHolesAndSelfAliases() {
         val runtime = runtime()
-        val target = JsArray(mutableListOf(Hole, Undefined, "tail"))
+        val target = JsArray(mutableListOf(Hole, Undefined, JsString("tail")))
         val storage = target.values
         assertEquals(3.0, call(runtime, target, "unshift"))
         assertEquals(4.0, call(runtime, target, "unshift", listOf(target)))
@@ -97,10 +96,10 @@ class ArrayMutationLane18Test {
 
     @Test fun methodAliasesUseTheirReceiverAndCopiesRemainShallow() {
         val runtime = runtime()
-        val target = JsArray(mutableListOf("a", Hole, "b"))
-        val other = JsArray(mutableListOf(target, "c"))
+        val target = JsArray(mutableListOf(JsString("a"), Hole, JsString("b")))
+        val other = JsArray(mutableListOf(target, JsString("c")))
         val splice = runtime.get(target, "splice")
-        val removed = runtime.invoke(splice, other, listOf(0.0, 1.0, other)) as JsArray
+        val removed = runtime.invoke(splice, other, listOf(JsNumber(0.0), JsNumber(1.0), other)) as JsArray
         assertSame(target, removed.values[0])
         assertSame(other, other.values[0])
         assertEquals(listOf<Any?>("a", Hole, "b"), target.values)
@@ -150,7 +149,7 @@ class ArrayMutationLane18Test {
         for ((method, args, internalAllocation) in cases) {
             val stepCost = method.length + 2 + if (method == "slice") if (args.isEmpty()) 3 else 0 else 3
             val runtime = runtime()
-            val target = JsArray(mutableListOf("a", Hole, Undefined))
+            val target = JsArray(mutableListOf(JsString("a"), Hole, Undefined))
             runtime.tick(2_000_000 - stepCost)
             call(runtime, target, method, args)
             assertTrue(assertFailsWith<UnsupportedPlayerException> { runtime.tick() }.message!!.contains("step limit"))
@@ -158,7 +157,7 @@ class ArrayMutationLane18Test {
             val allocation = args.size + 1 + internalAllocation
             for (excess in 0..1) {
                 val budgeted = runtime()
-                val array = JsArray(mutableListOf("a", Hole, Undefined))
+                val array = JsArray(mutableListOf(JsString("a"), Hole, Undefined))
                 fillAllocation(budgeted, 2_000_000 - allocation + excess)
                 if (excess == 0) {
                     call(budgeted, array, method, args)

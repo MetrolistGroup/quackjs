@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
@@ -73,7 +72,7 @@ class TemplateCopyingLane28Test {
         assertNotSame(aFunction, bFunction)
         assertNotSame(aFunction.env, bFunction.env)
         assertSame(aFunction.code, bFunction.code)
-        aValues.values[0] = "changed"
+        aValues.values[0] = JsString("changed")
         assertEquals("changed", first.invoke(aFunction, Undefined, emptyList()))
         assertEquals(1.0, second.invoke(bFunction, Undefined, emptyList()))
         assertEquals(1.0, ((template.values[0] as JsObject).fields["v"] as JsArray).values[0])

@@ -1,7 +1,7 @@
 package meow.nyx.quackjs
 
-internal fun Runtime.replace(receiver: Any?, searchValue: Any?, replacement: Any?): String {
-    if (receiver == null || receiver === Undefined) throw JsThrown("Invalid string method receiver")
+internal fun Runtime.replace(receiver: JsValue, searchValue: JsValue, replacement: JsValue): String {
+    if (receiver === JsNull || receiver === Undefined) throw JsThrown("Invalid string method receiver")
     val value = replacementString(receiver)
     val regex = if (searchValue is RegexValue) BoundedRegex(this, searchValue.source) else null
     val search = if (regex == null) replacementString(searchValue) else null
@@ -45,15 +45,15 @@ internal fun Runtime.replace(receiver: Any?, searchValue: Any?, replacement: Any
         output.append(value, cursor, match.start)
         if (callback) {
             allocate(match.captures.size / 2 + 3)
-            val args = ArrayList<Any?>(match.captures.size / 2 + 3)
-            args.add(replacementSlice(value, match.start, match.end))
+            val args = ArrayList<JsValue>(match.captures.size / 2 + 3)
+            args.add(JsString(replacementSlice(value, match.start, match.end)))
             for (i in match.captures.indices step 2) {
                 tick()
                 val start = match.captures[i]
-                args.add(if (start < 0) Undefined else replacementSlice(value, start, match.captures[i + 1]))
+                args.add(if (start < 0) Undefined else JsString(replacementSlice(value, start, match.captures[i + 1])))
             }
-            args.add(match.start.toDouble())
-            args.add(value)
+            args.add(JsNumber(match.start.toDouble()))
+            args.add(JsString(value))
             output.append(replacementString(invoke(replacement, Undefined, args)))
         } else output.substitute(template!!, value, match)
         cursor = match.end
@@ -111,7 +111,7 @@ private fun Runtime.replacementSlice(value: String, start: Int, end: Int): Strin
     return value.substring(start, end)
 }
 
-private fun Runtime.replacementString(value: Any?): String {
+private fun Runtime.replacementString(value: JsValue): String {
     val result = stringValue(value)
     tick(result.length)
     allocate(result.length)
