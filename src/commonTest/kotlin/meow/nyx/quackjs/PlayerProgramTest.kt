@@ -653,4 +653,10 @@ class PlayerProgramTest {
         assertEquals("0:0", compile("return (('='/2)|0)+':'+(('} '/2)|0);").decipherSignature("abc"))
         assertTrue(assertFailsWith<UnsupportedPlayerException> { compile("return x.repeat(2)") }.message!!.contains("Unsupported"))
     }
+
+    @Test fun mathTrigonometricFunctionsMatchStandardValuesAndInvalidDomains() {
+        assertEquals("0:1:0:0:0:0:2", compile("return [Math.sin(0),Math.cos(0),Math.tan(0),Math.asin(0),Math.acos(1),Math.atan(0),Math.log10(100)].join(':');").decipherSignature("x"))
+        assertEquals("true:true:true", compile("return [Math.atan2(0,-1)===3.141592653589793,Math.sin(Infinity)!==Math.sin(Infinity),Math.acos(2)!==Math.acos(2)].join(':');").decipherSignature("x"))
+        assertEquals("0:0:0", compile("return [Math.sinh(0),Math.cosh(0)-1,Math.tanh(0)].join(':');").decipherSignature("x"))
+    }
 }

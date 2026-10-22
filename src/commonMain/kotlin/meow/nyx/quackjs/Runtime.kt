@@ -1,11 +1,23 @@
 package meow.nyx.quackjs
 
 import kotlin.math.abs
+import kotlin.math.acos
+import kotlin.math.asin
+import kotlin.math.atan
+import kotlin.math.atan2
 import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.cosh
 import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.log2
+import kotlin.math.log10
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sinh
+import kotlin.math.tan
+import kotlin.math.tanh
 import kotlin.math.sqrt
 
 internal data object Undefined
@@ -614,51 +626,42 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         val value = a.firstOrNull()
         if (value == null || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
     }
-    private val math get() =
-        JsObject(
-            mutableMapOf(
-                "E" to 2.718281828459045,
-                "LN10" to 2.302585092994046,
-                "LN2" to 0.6931471805599453,
-                "LOG10E" to 0.4342944819032518,
-                "LOG2E" to 1.4426950408889634,
-                "PI" to 3.141592653589793,
-                "SQRT1_2" to 0.7071067811865476,
-                "SQRT2" to 1.4142135623730951,
-                "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
-                "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
-                "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
-                "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
-                "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
-                "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
-                "sign" to
-                    Native { r, _, a ->
-                        val n = r.number(a.getOrElse(0) { Undefined })
-                        if (n.isNaN() ||
-                            n == 0.0
-                        ) {
-                            n
-                        } else if (n < 0.0) {
-                            -1.0
-                        } else {
-                            1.0
-                        }
-                    },
-                "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
-                "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
-                "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
-                "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
-                "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
-                "trunc" to
-                    Native { _, _, a ->
-                        val n = number(a.getOrElse(0) { Undefined })
-                        if (n < 0) ceil(n) else floor(n)
-                    },
-                "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
-                "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY },
-            ),
-            "Math",
-        )
+    private val math get() = JsObject(mutableMapOf(
+        "E" to 2.718281828459045,
+        "LN10" to 2.302585092994046,
+        "LN2" to 0.6931471805599453,
+        "LOG10E" to 0.4342944819032518,
+        "LOG2E" to 1.4426950408889634,
+        "PI" to 3.141592653589793,
+        "SQRT1_2" to 0.7071067811865476,
+        "SQRT2" to 1.4142135623730951,
+        "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
+        "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
+        "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
+        "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
+        "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
+        "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
+        "sign" to Native { r, _, a -> val n = r.number(a.getOrElse(0) { Undefined }); if (n.isNaN() || n == 0.0) n else if (n < 0.0) -1.0 else 1.0 },
+        "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
+        "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
+        "acos" to Native { _, _, a -> acos(number(a.getOrElse(0) { Undefined })) },
+        "asin" to Native { _, _, a -> asin(number(a.getOrElse(0) { Undefined })) },
+        "atan" to Native { _, _, a -> atan(number(a.getOrElse(0) { Undefined })) },
+        "atan2" to Native { _, _, a -> atan2(number(a.getOrElse(0) { Undefined }), number(a.getOrElse(1) { Undefined })) },
+        "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
+        "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
+        "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
+        "cos" to Native { _, _, a -> cos(number(a.getOrElse(0) { Undefined })) },
+        "cosh" to Native { _, _, a -> cosh(number(a.getOrElse(0) { Undefined })) },
+        "log10" to Native { _, _, a -> log10(number(a.getOrElse(0) { Undefined })) },
+        "sin" to Native { _, _, a -> sin(number(a.getOrElse(0) { Undefined })) },
+        "sinh" to Native { _, _, a -> sinh(number(a.getOrElse(0) { Undefined })) },
+        "tan" to Native { _, _, a -> tan(number(a.getOrElse(0) { Undefined })) },
+        "tanh" to Native { _, _, a -> tanh(number(a.getOrElse(0) { Undefined })) },
+        "trunc" to Native { _, _, a -> val n = number(a.getOrElse(0) { Undefined }); if (n < 0) ceil(n) else floor(n) },
+        "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
+        "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY }
+    ), "Math")
     private data object Missing
 }
 
