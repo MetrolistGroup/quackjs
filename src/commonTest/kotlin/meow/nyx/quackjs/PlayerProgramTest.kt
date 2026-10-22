@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -418,7 +417,7 @@ class PlayerProgramTest {
         assertEquals("", compile("return x.split(',',4294967296).join('|');").decipherSignature("a,b"))
         val runtime = Runtime(SourceIndex(source(), "C"))
         val value = "x".repeat(8_000_000)
-        val split = runtime.invoke(runtime.get(value, "split"), value, listOf("", 1.0)) as JsArray
+        val split = runtime.invoke(runtime.get(JsString(value), "split"), JsString(value), listOf(JsString(""), JsNumber(1.0))) as JsArray
         assertEquals(listOf<Any?>("x"), split.values)
     }
 
@@ -445,9 +444,9 @@ class PlayerProgramTest {
     @Test fun joinRejectsOverflowingLengthsBeforeAllocatingOutput() {
         val runtime = Runtime(SourceIndex(source(), "C"))
         val literal = "x".repeat(8_000_000)
-        val values = runtime.array(List(270) { literal })
+        val values = runtime.array(List(270) { JsString(literal) })
         val error = assertFailsWith<UnsupportedPlayerException> {
-            runtime.invoke(runtime.get(values, "join"), values, listOf(""))
+            runtime.invoke(runtime.get(values, "join"), values, listOf(JsString("")))
         }
         assertTrue(error.message!!.contains("String size limit"))
     }
@@ -559,7 +558,9 @@ class PlayerProgramTest {
         assertFailsWith<UnsupportedPlayerException> { compile("return 010+x;") }
         assertFailsWith<UnsupportedPlayerException> { compile("break;return x;") }
         assertFailsWith<UnsupportedPlayerException> { compile("return (") }
-        assertFailsWith<UnsupportedPlayerException> { compile(update = "try{throw 'failed'}catch(e){o.set('n','marker_'+o.V.n)}") }
+        for (prefix in listOf("marker_", "enhanced_except_")) {
+            assertFailsWith<UnsupportedPlayerException> { compile(update = "try{throw 'failed'}catch(e){o.set('n','$prefix'+o.V.n)}") }
+        }
         assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(source(), PlayerHints("sig(INPUT);evil()", "C", 1)) }
         assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(source(), PlayerHints("sig(INPUT)", "C;evil()", 1)) }
     }

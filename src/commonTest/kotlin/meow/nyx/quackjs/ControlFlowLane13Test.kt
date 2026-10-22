@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -10,7 +9,7 @@ import kotlin.test.assertTrue
 class ControlFlowLane13Test {
     private fun run(body: String): Any? {
         val runtime = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
-        return runtime.expression(Parser(Lexer("(function(){$body})()").tokens()).completeExpression())
+        return testHostValue(runtime.expression(Parser(Lexer("(function(){$body})()").tokens()).completeExpression()))
     }
 
     @Test fun returnsPreserveFalsyValuesAndObjectIdentity() {

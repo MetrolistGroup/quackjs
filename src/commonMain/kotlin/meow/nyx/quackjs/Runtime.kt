@@ -8,36 +8,27 @@ import kotlin.math.ln
 import kotlin.math.log2
 import kotlin.math.sqrt
 
-internal data object Undefined
-internal data object Hole
-internal class JsObject(val fields: MutableMap<String, Any?> = mutableMapOf(), val builtin: String? = null)
-internal class JsArray(val values: MutableList<Any?>, val fields: MutableMap<String, Any?> = mutableMapOf())
-internal class JsFunction(val code: FunctionExpr, val env: Env)
-internal class Native(fields: Map<String, Any?> = emptyMap(), val constructible: Boolean = false, val callable: Boolean = true, val functionName: String? = null, val invoke: (Runtime, Any?, List<Any?>) -> Any?) {
-    val fields = fields.mapValues { (name, value) -> if (value is Native) value.named(name) else value }
-    fun named(name: String): Native = if (functionName != null) this else Native(fields, constructible, callable, name, invoke)
+internal class JsThrown(val value: JsValue) : Exception() {
+    constructor(message: String) : this(JsString(message))
 }
-internal class JsDate(val time: Double)
-internal class JsThrown(val value: Any?) : Exception()
-private data object ReturnedNull
 internal class Env(val parent: Env? = null, private val names: Map<String, Int>? = null) {
-    private var entries: MutableMap<String, Any?>? = null
+    private var entries: MutableMap<String, JsValue>? = null
     var revision: Int = 0
         private set
-    val values: MutableMap<String, Any?> get() = entries ?: mutableMapOf<String, Any?>().also { entries = it }
-    val slots: Array<Any?> = Array(names?.size ?: 0) { Undefined }
+    val values: MutableMap<String, JsValue> get() = entries ?: mutableMapOf<String, JsValue>().also { entries = it }
+    val slots: Array<JsValue> = Array(names?.size ?: 0) { Undefined }
     val frame: Env? = if (names != null) this else parent?.frame
     fun owner(name: String): Env? = if (names?.containsKey(name) == true || entries?.containsKey(name) == true) this else parent?.owner(name)
-    operator fun get(name: String): Any? { val slot = names?.get(name); return if (slot == null) entries?.get(name) else slots[slot] }
-    operator fun set(name: String, value: Any?) { val slot = names?.get(name); if (slot == null) { values[name] = value; revision++ } else slots[slot] = value }
+    operator fun get(name: String): JsValue? { val slot = names?.get(name); return if (slot == null) entries?.get(name) else slots[slot] }
+    operator fun set(name: String, value: JsValue) { val slot = names?.get(name); if (slot == null) { values[name] = value; revision++ } else slots[slot] = value }
 }
 
-internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, Any?> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0) {
+internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, JsValue> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0) {
     val definitions = mutableMapOf<String, Expr>()
     val constantDates = mutableMapOf<String, Double>()
     val specializedBodies: MutableMap<DispatchKey, Block>? = if (recordDispatch) mutableMapOf() else null
     private val global = Env()
-    private val globalSlots: Array<Any?> = Array(globalCount) { Missing }
+    private val globalSlots: Array<JsValue?> = arrayOfNulls(globalCount)
     private var globalRevision = 0
     private val resolving = mutableSetOf<String>()
     private var steps = 0
@@ -52,35 +43,35 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         allocated += size + 1
         if (allocated > 2_000_000) unsupported("Allocation limit exceeded")
     }
-    fun array(items: List<Any?>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
-    private fun arrayRange(items: List<Any?>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
-    fun string(value: String): String { allocate(value.length); return value }
-    private fun number(value: Any?): Double {
+    fun array(items: List<JsValue>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
+    private fun arrayRange(items: List<JsValue>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
+    fun string(value: String): JsString { allocate(value.length); return JsString(value) }
+    private fun number(value: JsValue): Double {
         // Default function/regex strings cannot parse as numbers; with no own coercion methods this
         // avoids constructing large join strings without skipping any user code.
         if (value is JsArray && arrayAlwaysCoercesToNaN(value)) return Double.NaN
         val input = primitive(value, PrimitiveHint.NUMBER)
-        if (input is String) tick(input.length)
+        if (input is JsString) tick(input.value.length)
         return meow.nyx.quackjs.number(input)
     }
-    private fun int(value: Any?): Int = meow.nyx.quackjs.int(number(value))
-    private fun uint(value: Any?): Long = meow.nyx.quackjs.uint(number(value))
-    private fun integer(value: Any?): Int = meow.nyx.quackjs.integer(number(value))
-    private fun relative(value: Any?, length: Int): Int = meow.nyx.quackjs.relative(number(value), length)
+    private fun int(value: JsValue): Int = meow.nyx.quackjs.int(number(value))
+    private fun uint(value: JsValue): Long = meow.nyx.quackjs.uint(number(value))
+    private fun integer(value: JsValue): Int = meow.nyx.quackjs.integer(number(value))
+    private fun relative(value: JsValue, length: Int): Int = meow.nyx.quackjs.relative(number(value), length)
     private enum class PrimitiveHint { DEFAULT, NUMBER, STRING }
     private var conversionDepth = 0
     private val joiningArrays = mutableSetOf<JsArray>()
-    private fun primitive(value: Any?, hint: PrimitiveHint = PrimitiveHint.DEFAULT): Any? {
+    private fun primitive(value: JsValue, hint: PrimitiveHint = PrimitiveHint.DEFAULT): JsValue {
         if (++conversionDepth > 64) unsupported("Primitive conversion depth limit exceeded")
         try { return when (value) {
             is JsArray, is JsObject -> ordinaryPrimitive(value, hint)
-            is JsDate -> if (hint == PrimitiveHint.NUMBER) value.time else unsupported("Default date coercion is unsupported")
-            is JsFunction, is Native -> text(value).also { tick(it.length); allocate(it.length) }
-            is RegexValue -> BoundedRegex(this, value.source).literalText()
+            is JsDate -> if (hint == PrimitiveHint.NUMBER) JsNumber(value.time) else unsupported("Default date coercion is unsupported")
+            is JsFunction, is Native -> JsString(text(value).also { tick(it.length); allocate(it.length) })
+            is RegexValue -> JsString(BoundedRegex(this, value.source).literalText())
             else -> value
         } } finally { conversionDepth-- }
     }
-    private fun ordinaryPrimitive(value: Any, hint: PrimitiveHint): Any? {
+    private fun ordinaryPrimitive(value: JsValue, hint: PrimitiveHint): JsValue {
         val names = if (hint == PrimitiveHint.STRING) arrayOf("toString", "valueOf") else arrayOf("valueOf", "toString")
         for (name in names) {
             // Look up each method only after the preceding method's side effects.
@@ -91,7 +82,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         throw JsThrown("Cannot convert object to primitive value")
     }
-    internal fun stringValue(value: Any?): String = text(primitive(value, PrimitiveHint.STRING))
+    internal fun stringValue(value: JsValue): String = text(primitive(value, PrimitiveHint.STRING))
     private fun arrayAlwaysCoercesToNaN(root: JsArray): Boolean {
         val pending = ArrayDeque<JsArray>()
         val seen = mutableSetOf<JsArray>()
@@ -109,21 +100,22 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 is JsArray -> { allocate(1); pending.addLast(item) }
                 is JsObject -> if (item.fields.containsKey("toString") || item.fields.containsKey("valueOf")) return false
                 is JsDate -> return false
-                is Double -> if (item.isFinite() && (item != floor(item) || abs(item) > 9007199254740991.0)) return false
+                is JsNumber -> if (item.value.isFinite() && (item.value != floor(item.value) || abs(item.value) > 9007199254740991.0)) return false
+                else -> Unit
             }
         }
         return hasCallable
     }
-    private fun joinArray(array: JsArray, separatorValue: Any? = Undefined): String {
+    private fun joinArray(array: JsArray, separatorValue: JsValue = Undefined): JsString {
         val length = array.values.size
         val separator = if (separatorValue === Undefined) "," else stringValue(separatorValue)
-        if (!joiningArrays.add(array)) return ""
+        if (!joiningArrays.add(array)) return JsString("")
         try {
             tick(length)
             val result = StringBuilder()
             for (i in 0 until length) {
                 val item = array.values.getOrElse(i) { Undefined }
-                val part = if (item == null || item === Undefined || item === Hole) "" else stringValue(item)
+                val part = if (item === JsNull || item === Undefined || item === Hole) "" else stringValue(item)
                 if (result.length.toLong() + part.length + (if (i == 0) 0 else separator.length) > 65_536) unsupported("String size limit exceeded")
                 if (i > 0) result.append(separator)
                 result.append(part)
@@ -131,8 +123,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             return string(result.toString())
         } finally { joiningArrays.remove(array) }
     }
-    private fun callable(value: Any?): Boolean = value is JsFunction || value is Native && value.callable
-    private fun isRuntimeObject(value: Any?): Boolean =
+    private fun callable(value: JsValue): Boolean = value is JsFunction || value is Native && value.callable
+    private fun isRuntimeObject(value: JsValue): Boolean =
         value is JsArray || value is JsObject || value is JsFunction || value is Native || value is JsDate || value is RegexValue
     private fun find(value: String, search: String, from: Int, backwards: Boolean = false): Int {
         tick()
@@ -159,20 +151,19 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         return -1
     }
-    private fun equal(a: Any?, b: Any?, strict: Boolean): Boolean {
+    private fun equal(a: JsValue, b: JsValue, strict: Boolean): Boolean {
         if (!strict) {
-            if (isRuntimeObject(a) && !isRuntimeObject(b) && b != null && b !== Undefined) return equal(primitive(a), b, false)
-            if (isRuntimeObject(b) && !isRuntimeObject(a) && a != null && a !== Undefined) return equal(a, primitive(b), false)
+            if (isRuntimeObject(a) && !isRuntimeObject(b) && b !== JsNull && b !== Undefined) return equal(primitive(a), b, false)
+            if (isRuntimeObject(b) && !isRuntimeObject(a) && a !== JsNull && a !== Undefined) return equal(a, primitive(b), false)
         }
-        if (a is String && b is String) { if (a.length == b.length) tick(a.length) }
-        else if (!strict) { if (a is String) tick(a.length); if (b is String) tick(b.length) }
+        if (a is JsString && b is JsString) { if (a.value.length == b.value.length) tick(a.value.length) }
+        else if (!strict) { if (a is JsString) tick(a.value.length); if (b is JsString) tick(b.value.length) }
         return meow.nyx.quackjs.equal(a, b, strict)
     }
-    fun resolve(name: String): Any? {
+    fun resolve(name: String): JsValue {
         global.values[name]?.let { return it }
-        if (global.values.containsKey(name)) return global.values[name]
         val builtin = builtin(name)
-        if (builtin !== Missing) {
+        if (builtin != null) {
             val value = if (builtin is Native) builtin.named(name) else builtin
             global.values[name] = value
             return value
@@ -181,32 +172,32 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         if (resolving.size > 64 || parsed.size + definitions.size > 512) unsupported("Dependency limit exceeded")
         try {
             val expr = parsed[name] ?: definitions.getOrPut(name) { source.definition(name) }
-            val value = if (templates.containsKey(name)) copyTemplate(templates[name]) else eval(expr, global)
+            val value = templates[name]?.let(::copyTemplate) ?: eval(expr, global)
             global.values[name] = value
             return value
         } finally { resolving.remove(name) }
     }
-    fun eval(expr: Expr, env: Env): Any? {
+    fun eval(expr: Expr, env: Env): JsValue {
         tick()
         if (expr is Lit) return expr.value
-        if (expr is Id) return if (expr.slot >= 0) env.frame!!.slots[expr.slot] else if (expr.free && env.frame?.parent === global) globalValue(expr) else { val owner = env.owner(expr.name); if (owner != null) owner[expr.name] else resolve(expr.name) }
+        if (expr is Id) return if (expr.slot >= 0) env.frame!!.slots[expr.slot] else if (expr.free && env.frame?.parent === global) globalValue(expr) else { val owner = env.owner(expr.name); if (owner != null) owner[expr.name]!! else resolve(expr.name) }
         return evalComplex(expr, env)
     }
-    private fun globalValue(id: Id): Any? {
+    private fun globalValue(id: Id): JsValue {
         if (id.globalSlot < 0) return resolve(id.name)
-        if (globalRevision != global.revision) { globalSlots.fill(Missing); globalRevision = global.revision }
+        if (globalRevision != global.revision) { globalSlots.fill(null); globalRevision = global.revision }
         val value = globalSlots[id.globalSlot]
-        if (value !== Missing) return value
+        if (value != null) return value
         return resolve(id.name).also { globalSlots[id.globalSlot] = it }
     }
-    private fun evalComplex(expr: Expr, env: Env): Any? {
+    private fun evalComplex(expr: Expr, env: Env): JsValue {
         if (++expressionDepth > 256) unsupported("Expression execution depth limit exceeded")
         try { return when (expr) {
             is Lit, is Id -> error("Leaf expression in complex evaluator")
             is Unary -> when (expr.op) {
                 "typeof" -> {
-                    val value = if (expr.expr is Id && env.owner(expr.expr.name) == null && !source.hasDefinition(expr.expr.name) && builtin(expr.expr.name) === Missing) Undefined else eval(expr.expr, env)
-                    when (value) { Undefined -> "undefined"; null -> "object"; is String -> "string"; is Double, is Int -> "number"; is Boolean -> "boolean"; is JsFunction, is Native -> "function"; else -> "object" }
+                    val value = if (expr.expr is Id && env.owner(expr.expr.name) == null && !source.hasDefinition(expr.expr.name) && builtin(expr.expr.name) == null) Undefined else eval(expr.expr, env)
+                    JsString(when (value) { Undefined -> "undefined"; is JsString -> "string"; is JsNumber -> "number"; is JsBoolean -> "boolean"; is JsFunction, is Native -> "function"; else -> "object" })
                 }
                 "delete" -> {
                     val target = expr.expr as? Member ?: unsupported("Unsupported delete target")
@@ -217,14 +208,13 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     when (obj) {
                         is JsObject -> obj.fields.remove(key)
                         is JsArray -> { val i = index(key); if (i != null && i < obj.values.size) obj.values[i] = Hole else obj.fields.remove(key) }
-                        else -> unsupported("Unsupported delete target")
-                    }; true
+                    }; JsBoolean(true)
                 }
                 "void" -> { eval(expr.expr, env); Undefined }
-                "!" -> !truth(eval(expr.expr, env))
-                "~" -> int(eval(expr.expr, env)).inv().toDouble()
-                "+" -> number(eval(expr.expr, env))
-                "-" -> -number(eval(expr.expr, env))
+                "!" -> JsBoolean(!truth(eval(expr.expr, env)))
+                "~" -> JsNumber(int(eval(expr.expr, env)).inv().toDouble())
+                "+" -> JsNumber(number(eval(expr.expr, env)))
+                "-" -> JsNumber(-number(eval(expr.expr, env)))
                 else -> unsupported("Unsupported unary operator ${expr.op}")
             }
             is Binary -> {
@@ -235,7 +225,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     }
                     "&&" -> eval(expr.left, env).let { if (truth(it)) eval(expr.right, env) else it }
                     "||" -> eval(expr.left, env).let { if (truth(it)) it else eval(expr.right, env) }
-                    "??" -> eval(expr.left, env).let { if (it == null || it === Undefined) eval(expr.right, env) else it }
+                    "??" -> eval(expr.left, env).let { if (it === JsNull || it === Undefined) eval(expr.right, env) else it }
                     "," -> { eval(expr.left, env); eval(expr.right, env) }
                     else -> binary(expr.op, eval(expr.left, env), eval(expr.right, env))
                 }
@@ -243,17 +233,17 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             is Conditional -> eval(if (truth(eval(expr.test, env))) expr.yes else expr.no, env)
             is Member -> property(eval(expr.target, env), eval(expr.key, env))
             is Call -> {
-                var self: Any? = Undefined
+                var self: JsValue = Undefined
                 val fn = if (expr.fn is Member) {
                     self = eval(expr.fn.target, env)
                     val key = eval(expr.fn.key, env)
-                    if (!expr.construct && key == "call" && (self is JsFunction || self is Native)) {
+                    if (!expr.construct && key == JsString("call") && (self is JsFunction || self is Native)) {
                         if (expr.args.isEmpty()) return invoke(self, Undefined, emptyList())
                         val receiver = eval(expr.args[0], env)
                         return invoke(self, receiver, arguments(expr.args, env, 1))
                     }
                     val method = property(self, key)
-                    if (method === Undefined && key is String && (self is String || self is JsArray || self is Native) && identifierProperty(key) && key !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '$key'")
+                    if (method === Undefined && key is JsString && (self is JsString || self is JsArray || self is Native) && identifierProperty(key.value) && key.value !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '${key.value}'")
                     method
                 } else eval(expr.fn, env)
                 val args = arguments(expr.args, env)
@@ -266,27 +256,27 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 var old = 0.0
                 val value = assign(expr.target, env, read = true) {
                     old = number(it)
-                    old + if (expr.op == "++") 1 else -1
+                    JsNumber(old + if (expr.op == "++") 1 else -1)
                 }
-                if (expr.prefix) value else old
+                if (expr.prefix) value else JsNumber(old)
             }
             is ArrayExpr -> array(expr.items.map { eval(it, env) })
             is ObjectExpr -> { allocate(expr.items.size); JsObject(expr.items.associate { it.first to eval(it.second, env) }.toMutableMap()) }
             is FunctionExpr -> { allocate(1); JsFunction(expr, env) }
         } } finally { expressionDepth-- }
     }
-    private fun arguments(args: List<Expr>, env: Env, start: Int = 0): List<Any?> = when (args.size - start) {
+    private fun arguments(args: List<Expr>, env: Env, start: Int = 0): List<JsValue> = when (args.size - start) {
         0 -> emptyList()
         1 -> listOf(eval(args[start], env))
         2 -> listOf(eval(args[start], env), eval(args[start + 1], env))
         3 -> listOf(eval(args[start], env), eval(args[start + 1], env), eval(args[start + 2], env))
-        else -> ArrayList<Any?>(args.size - start).also { values ->
+        else -> ArrayList<JsValue>(args.size - start).also { values ->
             for (i in start until args.size) values.add(eval(args[i], env))
         }
     }
     fun function(code: FunctionExpr): JsFunction = JsFunction(code, global)
-    fun expression(expr: Expr, values: Map<String, Any?> = emptyMap()): Any? = eval(expr, Env(global).also { it.values.putAll(values) })
-    fun functionEnv(fn: JsFunction, self: Any?, args: List<Any?>, reuse: Env? = null): Env {
+    fun expression(expr: Expr, values: Map<String, JsValue> = emptyMap()): JsValue = eval(expr, Env(global).also { it.values.putAll(values) })
+    fun functionEnv(fn: JsFunction, self: JsValue, args: List<JsValue>, reuse: Env? = null): Env {
         if (reuse == null) allocate(fn.code.slots.size)
         tick(fn.code.slots.size)
         val env = reuse ?: Env(fn.env, fn.code.slots)
@@ -297,7 +287,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         if (fn.code.nameSlot >= 0) env.slots[fn.code.nameSlot] = fn
         return env
     }
-    fun invoke(fn: Any?, self: Any?, args: List<Any?>, construct: Boolean = false, reuse: Env? = null): Any? {
+    fun invoke(fn: JsValue, self: JsValue, args: List<JsValue>, construct: Boolean = false, reuse: Env? = null): JsValue {
         tick()
         allocate(args.size)
         if (++calls > 64) unsupported("Call depth limit exceeded")
@@ -311,34 +301,32 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     val env = functionEnv(fn, self, args, reuse)
                     // Reserve eleven complex-expression levels for the XOR-key shape; otherwise retain depth checks.
                     if (expressionDepth <= 245 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
-                    val key = if (args.size >= 2 && args[0] is Double && args[1] is Double) DispatchKey(fn.code, args[0] as Double, args[1] as Double) else null
+                    val key = if (args.size >= 2 && args[0] is JsNumber && args[1] is JsNumber) DispatchKey(fn.code, (args[0] as JsNumber).value, (args[1] as JsNumber).value) else null
                     val body = if (key == null) fn.code.body else dispatch[key] ?: specializedBodies?.get(key) ?: if (specializedBodies != null && specializedBodies.size < 256) specialize(fn.code, key.first, key.second, this).also { specializedBodies[key] = it } else fn.code.body
                     when (val flow = exec(body, env)) {
-                        is Jump -> unsupported("Invalid or unsupported jump from transform function")
-                        null -> Undefined
-                        ReturnedNull -> null
-                        else -> flow
+                        is Completion.Jumped -> unsupported("Invalid or unsupported jump from transform function")
+                        Completion.Normal -> Undefined
+                        is Completion.Returned -> flow.value
                     }
                 }
                 else -> throw JsThrown("Value is not callable")
             }
         } finally { calls-- }
     }
-    private fun copyTemplate(value: Any?): Any? = when (value) {
+    private fun copyTemplate(value: JsValue): JsValue = when (value) {
         is JsArray -> { allocate(value.values.size); JsArray(MutableList(value.values.size) { copyTemplate(value.values[it]) }) }
         is JsObject -> { allocate(value.fields.size); JsObject(value.fields.mapValuesTo(mutableMapOf()) { copyTemplate(it.value) }, value.builtin) }
         is JsFunction -> { allocate(1); JsFunction(value.code, global) }
         else -> value
     }
-    // null means normal completion; returns carry their value (null encoded), jumps carry the AST node.
-    fun exec(stmt: Stmt, env: Env): Any? {
+    fun exec(stmt: Stmt, env: Env): Completion {
         tick()
         when (stmt) {
-            is Block -> for (i in stmt.statements.indices) { val flow = exec(stmt.statements[i], env); if (flow != null) return flow }
+            is Block -> for (i in stmt.statements.indices) { val flow = exec(stmt.statements[i], env); if (flow !== Completion.Normal) return flow }
             is ExpressionStmt -> { eval(stmt.expr, env) }
             is Vars -> for (i in stmt.items.indices) { val (name, expr) = stmt.items[i]; if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
-            is IfStmt -> return if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) }
-            is ReturnStmt -> return (if (stmt.expr == null) Undefined else eval(stmt.expr, env)) ?: ReturnedNull
+            is IfStmt -> return if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) } ?: Completion.Normal
+            is ReturnStmt -> return Completion.Returned(if (stmt.expr == null) Undefined else eval(stmt.expr, env))
             is ThrowStmt -> throw JsThrown(eval(stmt.expr, env))
             is Loop -> {
                 stmt.init?.let { exec(it, env) }
@@ -346,15 +334,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 while (stmt.doFirst && first || stmt.test == null || truth(eval(stmt.test, env))) {
                     tick(); first = false
                     val flow = exec(stmt.body, env)
-                    if (flow is Jump && flow.label == null) { if (!flow.isContinue) break }
-                    else if (flow != null) return flow
+                    if (flow is Completion.Jumped && flow.label == null) { if (!flow.isContinue) break }
+                    else if (flow !== Completion.Normal) return flow
                     stmt.update?.let { eval(it, env) }
                 }
             }
-            is Jump -> { if (stmt.isContinue && stmt.label != null) unsupported("Labeled continue is unsupported"); return stmt }
+            is Jump -> { if (stmt.isContinue && stmt.label != null) unsupported("Labeled continue is unsupported"); return Completion.Jumped(stmt.isContinue, stmt.label) }
             is Label -> {
                 val flow = exec(stmt.body, env)
-                if (flow !is Jump || flow.label != stmt.name || flow.isContinue) return flow
+                if (flow !is Completion.Jumped || flow.label != stmt.name || flow.isContinue) return flow
             }
             is TryStmt -> {
                 // Unsupported syntax and resource failures are deliberately not JavaScript exceptions.
@@ -366,9 +354,9 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                         handlers++
                         try { exec(stmt.handler, catchEnv) } finally { handlers-- }
                     }
-                } catch (error: JsThrown) { pending = error; null }
-                val finalFlow = stmt.finalizer?.let { exec(it, env) }
-                if (finalFlow != null) return finalFlow
+                } catch (error: JsThrown) { pending = error; Completion.Normal }
+                val finalFlow = stmt.finalizer?.let { exec(it, env) } ?: Completion.Normal
+                if (finalFlow !== Completion.Normal) return finalFlow
                 if (pending != null) throw pending
                 return flow
             }
@@ -380,17 +368,17 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     val statements = stmt.cases[i].second
                     for (j in statements.indices) {
                         val flow = exec(statements[j], env)
-                        if (flow is Jump && !flow.isContinue && flow.label == null) return null
-                        if (flow != null) return flow
+                        if (flow is Completion.Jumped && !flow.isContinue && flow.label == null) return Completion.Normal
+                        if (flow !== Completion.Normal) return flow
                     }
                 }
             }
             EmptyStmt -> Unit
         }
-        return null
+        return Completion.Normal
     }
     // Keep the target and its old value stable across RHS mutations without allocating a reference.
-    private inline fun assign(expr: Expr, env: Env, read: Boolean, value: (Any?) -> Any?): Any? = when (expr) {
+    private inline fun assign(expr: Expr, env: Env, read: Boolean, value: (JsValue) -> JsValue): JsValue = when (expr) {
         is Id -> {
             if (expr.slot >= 0) {
                 val slots = env.frame!!.slots
@@ -399,18 +387,18 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 result
             } else {
                 val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
-                val result = value(if (read) owner[expr.name] else Undefined)
+                val result = value(if (read) owner[expr.name]!! else Undefined)
                 owner[expr.name] = result
                 result
             }
         }
         is Member -> {
             val obj = eval(expr.target, env); val rawKey = eval(expr.key, env)
-            if (obj == null || obj === Undefined) {
+            if (obj === JsNull || obj === Undefined) {
                 if (!read) value(Undefined)
                 throw JsThrown("Cannot set property on null/undefined")
             }
-            val key = if (numericIndex(rawKey) != null) rawKey else stringValue(rawKey)
+            val key = if (numericIndex(rawKey) != null) rawKey else JsString(stringValue(rawKey))
             val result = value(if (read) property(obj, key) else Undefined)
             val i = numericIndex(key)
             if (obj is JsArray && i != null) setIndex(obj, i, result) else set(obj, text(key), result)
@@ -418,7 +406,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         else -> unsupported("Invalid assignment target")
     }
-    fun set(obj: Any?, key: String, value: Any?) {
+    fun set(obj: JsValue, key: String, value: JsValue) {
         tick(key.length)
         when (obj) {
             is JsObject -> { if (!obj.fields.containsKey(key)) allocate(1); obj.fields[key] = value }
@@ -438,38 +426,39 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     else setIndex(obj, i, value)
                 }
             }
-            null, Undefined -> throw JsThrown("Cannot set property on null/undefined")
+            JsNull, Undefined -> throw JsThrown("Cannot set property on null/undefined")
             else -> unsupported("Unsupported property assignment")
         }
     }
-    private fun setIndex(obj: JsArray, i: Int, value: Any?) {
+    private fun setIndex(obj: JsArray, i: Int, value: JsValue) {
         if (i >= 65_536) unsupported("Array index limit exceeded")
         if (i >= obj.values.size) { allocate(i + 1 - obj.values.size); repeat(i + 1 - obj.values.size) { obj.values.add(Hole) } }
         obj.values[i] = value
     }
-    private fun numericIndex(key: Any?): Int? = if (key is Double && key >= 0 && key < 65_536 && key == key.toInt().toDouble()) key.toInt() else null
-    internal fun property(obj: Any?, key: Any?): Any? {
-        if (obj == null || obj === Undefined) throw JsThrown("Cannot read property on null/undefined")
+    private fun numericIndex(key: JsValue): Int? = if (key is JsNumber && key.value >= 0 && key.value < 65_536 && key.value == key.value.toInt().toDouble()) key.value.toInt() else null
+    internal fun property(obj: JsValue, key: JsValue): JsValue {
+        if (obj === JsNull || obj === Undefined) throw JsThrown("Cannot read property on null/undefined")
         val i = numericIndex(key)
         if (i != null) when (obj) {
             is JsArray -> { tick(); val value = obj.values.getOrElse(i) { Undefined }; return if (value === Hole) Undefined else value }
-            is String -> { tick(); return if (i < obj.length) obj[i].toString() else Undefined }
+            is JsString -> { tick(); return if (i < obj.value.length) JsString(obj.value[i].toString()) else Undefined }
+            else -> Unit
         }
         return get(obj, stringValue(key))
     }
-    fun get(obj: Any?, key: String): Any? {
+    fun get(obj: JsValue, key: String): JsValue {
         tick(key.length + 1)
-        if (obj == null || obj === Undefined) throw JsThrown("Cannot read '$key' on null/undefined")
+        if (obj === JsNull || obj === Undefined) throw JsThrown("Cannot read '$key' on null/undefined")
         if ((obj is JsFunction || obj is Native) && key == "call") return callMethod
         if ((obj is JsFunction || obj is Native) && key == "apply") return applyMethod
-        if (obj is Native) return if (obj.fields.containsKey(key)) obj.fields[key] else unsupported("Unsupported built-in property '$key'")
+        if (obj is Native) return obj.fields[key] ?: unsupported("Unsupported built-in property '$key'")
         if (obj is JsFunction) return when (key) {
-            "length" -> obj.code.params.size.toDouble()
+            "length" -> JsNumber(obj.code.params.size.toDouble())
             "name", "prototype", "constructor", "bind", "caller", "arguments", "toString", "valueOf" -> unsupported("Unsupported function property '$key'")
             else -> Undefined
         }
         if (obj is JsObject) {
-            if (obj.fields.containsKey(key)) return obj.fields[key]
+            obj.fields[key]?.let { return it }
             return when (key) {
                 "toString" -> objectToString
                 "valueOf" -> objectValueOf
@@ -477,20 +466,20 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             }
         }
         if (obj is JsArray) {
-            if (key == "length") return obj.values.size.toDouble()
+            if (key == "length") return JsNumber(obj.values.size.toDouble())
             index(key)?.let { return obj.values.getOrElse(it) { Undefined }.let { item -> if (item === Hole) Undefined else item } }
-            if (obj.fields.containsKey(key)) return obj.fields[key]
+            obj.fields[key]?.let { return it }
             return arrayMethods[key] ?: Undefined
         }
-        if (obj is String) {
-            if (key == "length") return obj.length.toDouble()
-            index(key)?.let { return if (it < obj.length) obj[it].toString() else Undefined }
+        if (obj is JsString) {
+            if (key == "length") return JsNumber(obj.value.length.toDouble())
+            index(key)?.let { return if (it < obj.value.length) JsString(obj.value[it].toString()) else Undefined }
             return stringMethods[key] ?: Undefined
         }
-        if (key == "toString" && (obj is Double || obj is Int || obj is Boolean)) return Native(functionName = "toString") { r, self, a ->
-            if (obj is Boolean && self !is Boolean || obj !is Boolean && self !is Double && self !is Int) throw JsThrown("Invalid primitive method receiver")
+        if (key == "toString" && (obj is JsNumber || obj is JsBoolean)) return Native(functionName = "toString") { r, self, a ->
+            if (obj is JsBoolean && self !is JsBoolean || obj !is JsBoolean && self !is JsNumber) throw JsThrown("Invalid primitive method receiver")
             if (a.isNotEmpty() && r.number(a[0]) != 10.0) unsupported("Unsupported number radix")
-            text(self)
+            JsString(text(self))
         }
         if (obj is JsDate) unsupported("Unsupported date property '$key'")
         // Regexes may be opaque constants, but must never silently execute with Kotlin regex semantics.
@@ -501,8 +490,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     // Native methods are receiver-driven and immutable; only Runtime and the receiver own state.
     val callMethod = Native(functionName = "call") { r, self, a -> r.invoke(self, a.getOrElse(0) { Undefined }, a.drop(1)) }
     val applyMethod = Native(functionName = "apply") { r, self, a ->
-        val args = a.getOrNull(1)
-        val items = if (args == null || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown("Invalid apply arguments")
+        val args = a.getOrElse(1) { Undefined }
+        val items = if (args === JsNull || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown("Invalid apply arguments")
         r.tick(items.size); r.allocate(items.size)
         r.invoke(self, a.getOrElse(0) { Undefined }, items.map { if (it === Hole) Undefined else it })
     }
@@ -510,20 +499,20 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "fromCharCode" to Native { r, _, a -> r.tick(a.size); r.string(a.map { (r.int(it) and 65535).toChar() }.joinToString("")) }
     )) { r, _, a -> r.string(if (a.isEmpty()) "" else r.stringValue(a[0])) }
     val numberConstructor = Native(mapOf(
-        "isNaN" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isNaN() ?: false },
-        "isFinite" to Native { _, _, a -> (a.firstOrNull() as? Double)?.isFinite() ?: false }
-    )) { r, _, a -> if (a.isEmpty()) 0.0 else r.number(a[0]) }
+        "isNaN" to Native { _, _, a -> JsBoolean((a.firstOrNull() as? JsNumber)?.value?.isNaN() ?: false) },
+        "isFinite" to Native { _, _, a -> JsBoolean((a.firstOrNull() as? JsNumber)?.value?.isFinite() ?: false) }
+    )) { r, _, a -> JsNumber(if (a.isEmpty()) 0.0 else r.number(a[0])) }
     val objectToString = Native(functionName = "toString") { _, self, _ ->
         if (self is JsObject && self.builtin == "Error") unsupported("Default Error string coercion is unsupported")
-        if (self is JsObject) "[object ${self.builtin ?: "Object"}]" else unsupported("Unsupported object method receiver")
+        if (self is JsObject) JsString("[object ${self.builtin ?: "Object"}]") else unsupported("Unsupported object method receiver")
     }
     val objectValueOf = Native(functionName = "valueOf") { _, self, _ ->
         if (self is JsArray || self is JsObject) self else unsupported("Primitive object boxing is unsupported")
     }
     val arrayMethods = listOf("reverse", "join", "toString", "valueOf", "push", "unshift", "pop", "shift", "slice", "splice", "forEach", "indexOf").associateWith { (arrayMethod(it) as Native).named(it) }
     val stringMethods = listOf("split", "slice", "substring", "substr", "charCodeAt", "charAt", "indexOf", "lastIndexOf", "startsWith", "endsWith", "includes", "replace", "toString", "valueOf").associateWith { (stringMethod(it) as Native).named(it) }
-    private val latin1Characters = Array(256) { it.toChar().toString() }
-    private fun arrayMethod(name: String): Any? {
+    private val latin1Characters = Array(256) { JsString(it.toChar().toString()) }
+    private fun arrayMethod(name: String): JsValue {
         return when (name) {
             "reverse" -> Native { r, self, _ -> val target = self as? JsArray ?: unsupported("Unsupported array method receiver"); r.tick(target.values.size); target.values.reverse(); target }
             "join" -> Native { r, self, a ->
@@ -533,17 +522,17 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             "toString" -> Native { r, self, _ ->
                 val target = self as? JsArray ?: unsupported("Unsupported array method receiver")
                 val join = r.get(target, "join")
-                if (r.callable(join)) r.invoke(join, target, emptyList()) else "[object Array]"
+                if (r.callable(join)) r.invoke(join, target, emptyList()) else JsString("[object Array]")
             }
             "valueOf" -> objectValueOf
-            "push" -> Native { r, self, a -> val v = arrayValues(self); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); v.size.toDouble() }
-            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); v.size.toDouble() }
+            "push" -> Native { r, self, a -> val v = arrayValues(self); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); v.addAll(a); JsNumber(v.size.toDouble()) }
+            "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); JsNumber(v.size.toDouble()) }
             "pop" -> Native { _, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
             "shift" -> Native { r, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else { r.tick(v.size); v.removeAt(0).let { if (it === Hole) Undefined else it } } }
-            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { 0.0 }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); val count = (end - start).coerceAtLeast(0); r.tick(count); r.arrayRange(v, start, count) }
+            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); val count = (end - start).coerceAtLeast(0); r.tick(count); r.arrayRange(v, start, count) }
             "splice" -> Native { r, self, a ->
                 val v = arrayValues(self)
-                val start = r.relative(a.getOrElse(0) { 0.0 }, v.size)
+                val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, v.size)
                 val count = if (a.isEmpty()) 0 else if (a.size < 2) v.size - start else r.integer(a[1]).coerceIn(0, v.size - start)
                 val added = (a.size - 2).coerceAtLeast(0)
                 if (v.size - count + added > 65_536) unsupported("Array size limit exceeded")
@@ -577,7 +566,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 // Without closures or arguments, a callback cannot retain its invocation frame.
                 var frame: Env? = null
                 // Observable arguments are copied by functionEnv; nested traversals own their buffer.
-                var callbackArgs: MutableList<Any?>? = null
+                var callbackArgs: MutableList<JsValue>? = null
                 for (i in 0 until length) {
                     r.tick()
                     if (i < v.size && v[i] !== Hole) {
@@ -587,8 +576,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                             r.tick(callback.code.slots.size)
                             frame = Env(callback.env, callback.code.slots)
                         }
-                        if (callbackArgs == null) callbackArgs = mutableListOf(v[i], i.toDouble(), target)
-                        else { callbackArgs[0] = v[i]; callbackArgs[1] = i.toDouble() }
+                        if (callbackArgs == null) callbackArgs = mutableListOf(v[i], JsNumber(i.toDouble()), target)
+                        else { callbackArgs[0] = v[i]; callbackArgs[1] = JsNumber(i.toDouble()) }
                         r.invoke(callback, selfArg, callbackArgs, reuse = frame)
                     }
                 }
@@ -596,48 +585,48 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             }
             "indexOf" -> Native { r, self, a ->
                 val v = arrayValues(self)
-                val start = r.relative(a.getOrElse(1) { 0.0 }, v.size)
+                val start = r.relative(a.getOrElse(1) { JsNumber(0.0) }, v.size)
                 val search = a.getOrElse(0) { Undefined }
                 var result = -1
-                if (search is String && search.length == 1 || search is Boolean) {
+                if (search is JsString && search.value.length == 1 || search is JsBoolean) {
                     val found = if (start == 0) v.indexOf(search) else v.subList(start, v.size).indexOf(search)
                     r.tick(if (found < 0) v.size - start else found + 1)
                     if (found >= 0) result = start + found
                 } else for (i in start until v.size) { r.tick(); if (v[i] !== Hole && r.equal(v[i], search, true)) { result = i; break } }
-                result.toDouble()
+                JsNumber(result.toDouble())
             }
             else -> Undefined
         }
     }
-    private fun arrayValues(self: Any?): MutableList<Any?> = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
-    private fun stringReceiver(runtime: Runtime, self: Any?): String = if (self == null || self === Undefined) throw JsThrown("Invalid string method receiver") else runtime.stringValue(self)
-    private fun stringMethod(name: String): Any? = when (name) {
+    private fun arrayValues(self: JsValue): MutableList<JsValue> = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
+    private fun stringReceiver(runtime: Runtime, self: JsValue): String = if (self === JsNull || self === Undefined) throw JsThrown("Invalid string method receiver") else runtime.stringValue(self)
+    private fun stringMethod(name: String): JsValue = when (name) {
         "split" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
             if (a.firstOrNull() is RegexValue) unsupported("Regex split is unsupported")
             val limit = if (a.size < 2 || a[1] === Undefined) 4_294_967_295L else r.uint(a[1])
-            val sep = a.firstOrNull()
-            val separator = if (a.isNotEmpty() && sep !== Undefined) r.stringValue(sep) else null
+            val sep = a.getOrElse(0) { Undefined }
+            val separator = if (sep !== Undefined) r.stringValue(sep) else null
             if (separator == "") {
                 val size = minOf(value.length.toLong(), limit).toInt()
                 if (size > 65_536) unsupported("Array size limit exceeded")
-                val parts = MutableList<Any?>(size) { i ->
+                val parts = MutableList<JsValue>(size) { i ->
                     r.tick(2)
-                    if (value.length == 1) value else {
+                    if (value.length == 1) JsString(value) else {
                         r.allocate(1)
                         val char = value[i]
-                        if (char.code < latin1Characters.size) latin1Characters[char.code] else char.toString()
+                        if (char.code < latin1Characters.size) latin1Characters[char.code] else JsString(char.toString())
                     }
                 }
                 r.allocate(size)
                 return@Native JsArray(parts)
             }
-            val parts = mutableListOf<Any?>()
+            val parts = mutableListOf<JsValue>()
             fun addPart(start: Int, end: Int) {
                 r.tick(end - start + 1)
                 if (parts.size >= 65_536) unsupported("Array size limit exceeded")
-                if (start == 0 && end == value.length) parts.add(value)
-                else { r.allocate(end - start); parts.add(value.substring(start, end)) }
+                if (start == 0 && end == value.length) parts.add(JsString(value))
+                else { r.allocate(end - start); parts.add(JsString(value.substring(start, end))) }
             }
             if (limit > 0) {
                 if (separator == null) addPart(0, value.length)
@@ -656,20 +645,20 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         "slice", "substring", "substr" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
-            val rawStart = a.getOrElse(0) { 0.0 }
+            val rawStart = a.getOrElse(0) { JsNumber(0.0) }
             var start = if (name == "substring") r.integer(rawStart).coerceIn(0, value.length) else r.relative(rawStart, value.length)
             var end = if (a.size < 2 || a[1] === Undefined) value.length else if (name == "slice") r.relative(a[1], value.length) else if (name == "substr") (start.toLong() + r.integer(a[1]).coerceAtLeast(0)).coerceAtMost(value.length.toLong()).toInt() else r.integer(a[1]).coerceIn(0, value.length)
             if (name == "substring" && start > end) { val temp = start; start = end; end = temp }
             r.tick(end.coerceAtLeast(start) - start)
             r.string(value.substring(start, end.coerceAtLeast(start)))
         }
-        "charCodeAt", "charAt" -> Native { r, self, a -> val value = stringReceiver(r, self); val i = r.integer(a.getOrElse(0) { 0.0 }); if (i !in value.indices) if (name == "charAt") "" else Double.NaN else if (name == "charAt") value[i].toString() else value[i].code.toDouble() }
+        "charCodeAt", "charAt" -> Native { r, self, a -> val value = stringReceiver(r, self); val i = r.integer(a.getOrElse(0) { JsNumber(0.0) }); if (i !in value.indices) if (name == "charAt") JsString("") else JsNumber(Double.NaN) else if (name == "charAt") JsString(value[i].toString()) else JsNumber(value[i].code.toDouble()) }
         "indexOf", "lastIndexOf" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
             val search = r.stringValue(a.getOrElse(0) { Undefined })
             val position = if (a.size < 2 || a[1] === Undefined) if (name == "indexOf") 0.0 else Double.POSITIVE_INFINITY else r.number(a[1])
             val from = if (name == "lastIndexOf" && position.isNaN()) value.length else integer(position).coerceIn(0, value.length)
-            r.find(value, search, from, backwards = name == "lastIndexOf").toDouble()
+            JsNumber(r.find(value, search, from, backwards = name == "lastIndexOf").toDouble())
         }
         "startsWith", "endsWith", "includes" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
@@ -677,23 +666,23 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             val search = r.stringValue(a.getOrElse(0) { Undefined })
             if (name != "includes") r.tick(value.length)
             val pos = if (a.size < 2 || a[1] === Undefined) if (name == "endsWith") value.length else 0 else r.integer(a[1]).coerceIn(0, value.length)
-            when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> r.find(value, search, pos) >= 0 }
+            JsBoolean(when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> r.find(value, search, pos) >= 0 })
         }
-        "replace" -> Native { r, self, a -> r.replace(self, a.getOrElse(0) { Undefined }, a.getOrElse(1) { Undefined }) }
-        "toString", "valueOf" -> Native { _, self, _ -> self as? String ?: throw JsThrown("Invalid string method receiver") }
+        "replace" -> Native { r, self, a -> JsString(r.replace(self, a.getOrElse(0) { Undefined }, a.getOrElse(1) { Undefined })) }
+        "toString", "valueOf" -> Native { _, self, _ -> self as? JsString ?: throw JsThrown("Invalid string method receiver") }
         else -> Undefined
     }
     }
-    private fun binary(op: String, left: Any?, right: Any?): Any? = when (op) {
-        "+" -> { if (left is JsDate || right is JsDate) unsupported("Default date coercion is unsupported"); val a = primitive(left); val b = primitive(right); if (a is String || b is String) { val x = text(a); val y = text(b); if (handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else number(a) + number(b) }
-        "-" -> number(left) - number(right); "*" -> number(left) * number(right); "/" -> number(left) / number(right); "%" -> number(left) % number(right); "**" -> jsPow(number(left), number(right))
-        "^" -> (int(left) xor int(right)).toDouble(); "&" -> (int(left) and int(right)).toDouble(); "|" -> (int(left) or int(right)).toDouble()
-        "<<" -> (int(left) shl (int(right) and 31)).toDouble(); ">>" -> (int(left) shr (int(right) and 31)).toDouble(); ">>>" -> (int(left).toUInt() shr (int(right) and 31)).toDouble()
-        "==" -> equal(left, right, false); "!=" -> !equal(left, right, false); "===" -> equal(left, right, true); "!==" -> !equal(left, right, true)
+    private fun binary(op: String, left: JsValue, right: JsValue): JsValue = when (op) {
+        "+" -> { if (left is JsDate || right is JsDate) unsupported("Default date coercion is unsupported"); val a = primitive(left); val b = primitive(right); if (a is JsString || b is JsString) { val x = text(a); val y = text(b); if (handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else JsNumber(number(a) + number(b)) }
+        "-" -> JsNumber(number(left) - number(right)); "*" -> JsNumber(number(left) * number(right)); "/" -> JsNumber(number(left) / number(right)); "%" -> JsNumber(number(left) % number(right)); "**" -> JsNumber(jsPow(number(left), number(right)))
+        "^" -> JsNumber((int(left) xor int(right)).toDouble()); "&" -> JsNumber((int(left) and int(right)).toDouble()); "|" -> JsNumber((int(left) or int(right)).toDouble())
+        "<<" -> JsNumber((int(left) shl (int(right) and 31)).toDouble()); ">>" -> JsNumber((int(left) shr (int(right) and 31)).toDouble()); ">>>" -> JsNumber((int(left).toUInt() shr (int(right) and 31)).toDouble())
+        "==" -> JsBoolean(equal(left, right, false)); "!=" -> JsBoolean(!equal(left, right, false)); "===" -> JsBoolean(equal(left, right, true)); "!==" -> JsBoolean(!equal(left, right, true))
         "<", ">", "<=", ">=" -> {
             val a = primitive(left, PrimitiveHint.NUMBER); val b = primitive(right, PrimitiveHint.NUMBER)
-            if (a is String && b is String) { tick(minOf(a.length, b.length)); when (op) { "<" -> a < b; ">" -> a > b; "<=" -> a <= b; else -> a >= b } }
-            else { val x = number(a); val y = number(b); when (op) { "<" -> x < y; ">" -> x > y; "<=" -> x <= y; else -> x >= y } }
+            JsBoolean(if (a is JsString && b is JsString) { tick(minOf(a.value.length, b.value.length)); when (op) { "<" -> a.value < b.value; ">" -> a.value > b.value; "<=" -> a.value <= b.value; else -> a.value >= b.value } }
+            else { val x = number(a); val y = number(b); when (op) { "<" -> x < y; ">" -> x > y; "<=" -> x <= y; else -> x >= y } })
         }
         "in" -> {
             if (right !is JsObject && right !is JsArray) {
@@ -701,88 +690,78 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 throw JsThrown("Invalid right-hand side of in")
             }
             val key = stringValue(left); tick(key.length)
-            when (right) {
+            JsBoolean(when (right) {
                 is JsObject -> right.fields.containsKey(key)
                 is JsArray -> index(key)?.let { it < right.values.size && right.values[it] !== Hole } ?: right.fields.containsKey(key)
-                else -> error("Unexpected in receiver")
-            }
+            })
         }
         else -> unsupported("Unsupported operator '$op'")
     }
-    private fun builtin(name: String): Any? = when (name) {
-        "undefined" -> Undefined; "NaN" -> Double.NaN; "Infinity" -> Double.POSITIVE_INFINITY
+    private fun builtin(name: String): JsValue? = when (name) {
+        "undefined" -> Undefined; "NaN" -> JsNumber(Double.NaN); "Infinity" -> JsNumber(Double.POSITIVE_INFINITY)
         "String" -> stringConstructor
         "Number" -> numberConstructor
         "Date" -> Native(constructible = true, callable = false) { _, _, a ->
             allocate(1)
-            val value = a.firstOrNull() as? String ?: unsupported("Only constant ISO dates are supported")
+            val value = (a.firstOrNull() as? JsString)?.value ?: unsupported("Only constant ISO dates are supported")
             JsDate(dates[value] ?: constantDates[value] ?: parseDate(value).also { if (constantDates.size < 256) constantDates[value] = it })
         }
         "Math" -> math
-        "Array" -> Native(mapOf("isArray" to Native { _, _, a -> a.firstOrNull() is JsArray }), constructible = true) { r, _, a -> if (a.size == 1 && a[0] is Double) { val n = number(a[0]); if (n != floor(n) || n < 0 || n > 65_536) unsupported("Array size limit exceeded"); r.allocate(n.toInt()); JsArray(MutableList(n.toInt()) { Hole }) } else r.array(a) }
-        "Error", "TypeError", "RangeError" -> Native(constructible = true) { r, _, a -> JsObject(mutableMapOf("name" to name, "message" to if (a.isEmpty() || a[0] === Undefined) "" else r.stringValue(a[0])), builtin = "Error") }
+        "Array" -> Native(mapOf("isArray" to Native { _, _, a -> JsBoolean(a.firstOrNull() is JsArray) }), constructible = true) { r, _, a -> if (a.size == 1 && a[0] is JsNumber) { val n = number(a[0]); if (n != floor(n) || n < 0 || n > 65_536) unsupported("Array size limit exceeded"); r.allocate(n.toInt()); JsArray(MutableList(n.toInt()) { Hole }) } else r.array(a) }
+        "Error", "TypeError", "RangeError" -> Native(constructible = true) { r, _, a -> JsObject(mutableMapOf("name" to JsString(name), "message" to JsString(if (a.isEmpty() || a[0] === Undefined) "" else r.stringValue(a[0]))), builtin = "Error") }
         "Object" -> objectConstructor
-        else -> Missing
+        else -> null
     }
     private val objectConstructor get() = Native(mapOf(
-        "assign" to Native { r, _, a -> val target = a.firstOrNull() as? JsObject ?: unsupported("Unsupported Object.assign target"); a.drop(1).forEach { obj -> if (obj is JsObject) obj.fields.forEach { (k, v) -> r.set(target, k, v) } else if (obj != null && obj !== Undefined) unsupported("Unsupported Object.assign source") }; target }
+        "assign" to Native { r, _, a -> val target = a.firstOrNull() as? JsObject ?: unsupported("Unsupported Object.assign target"); a.drop(1).forEach { obj -> if (obj is JsObject) obj.fields.forEach { (k, v) -> r.set(target, k, v) } else if (obj !== JsNull && obj !== Undefined) unsupported("Unsupported Object.assign source") }; target }
     ), constructible = true) { _, _, a ->
-        val value = a.firstOrNull()
-        if (value == null || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
+        val value = a.getOrElse(0) { Undefined }
+        if (value === JsNull || value === Undefined) JsObject() else if (value is JsObject || value is JsArray || value is JsFunction || value is Native) value else unsupported("Primitive object boxing is unsupported")
     }
     private val math get() =
         JsObject(
             mutableMapOf(
-                "E" to 2.718281828459045,
-                "LN10" to 2.302585092994046,
-                "LN2" to 0.6931471805599453,
-                "LOG10E" to 0.4342944819032518,
-                "LOG2E" to 1.4426950408889634,
-                "PI" to 3.141592653589793,
-                "SQRT1_2" to 0.7071067811865476,
-                "SQRT2" to 1.4142135623730951,
-                "pow" to Native { r, _, a -> jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined })) },
-                "round" to Native { r, _, a -> jsRound(r.number(a.getOrElse(0) { Undefined })) },
-                "log" to Native { r, _, a -> ln(r.number(a.getOrElse(0) { Undefined })) },
-                "log2" to Native { r, _, a -> log2(r.number(a.getOrElse(0) { Undefined })) },
-                "sqrt" to Native { r, _, a -> sqrt(r.number(a.getOrElse(0) { Undefined })) },
-                "exp" to Native { r, _, a -> exp(r.number(a.getOrElse(0) { Undefined })) },
+                "E" to JsNumber(2.718281828459045),
+                "LN10" to JsNumber(2.302585092994046),
+                "LN2" to JsNumber(0.6931471805599453),
+                "LOG10E" to JsNumber(0.4342944819032518),
+                "LOG2E" to JsNumber(1.4426950408889634),
+                "PI" to JsNumber(3.141592653589793),
+                "SQRT1_2" to JsNumber(0.7071067811865476),
+                "SQRT2" to JsNumber(1.4142135623730951),
+                "pow" to Native { r, _, a -> JsNumber(jsPow(r.number(a.getOrElse(0) { Undefined }), r.number(a.getOrElse(1) { Undefined }))) },
+                "round" to Native { r, _, a -> JsNumber(jsRound(r.number(a.getOrElse(0) { Undefined }))) },
+                "log" to Native { r, _, a -> JsNumber(ln(r.number(a.getOrElse(0) { Undefined }))) },
+                "log2" to Native { r, _, a -> JsNumber(log2(r.number(a.getOrElse(0) { Undefined }))) },
+                "sqrt" to Native { r, _, a -> JsNumber(sqrt(r.number(a.getOrElse(0) { Undefined }))) },
+                "exp" to Native { r, _, a -> JsNumber(exp(r.number(a.getOrElse(0) { Undefined }))) },
                 "sign" to
                     Native { r, _, a ->
                         val n = r.number(a.getOrElse(0) { Undefined })
-                        if (n.isNaN() ||
-                            n == 0.0
-                        ) {
-                            n
-                        } else if (n < 0.0) {
-                            -1.0
-                        } else {
-                            1.0
-                        }
+                        JsNumber(if (n.isNaN() || n == 0.0) n else if (n < 0.0) -1.0 else 1.0)
                     },
-                "imul" to Native { r, _, a -> (r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble() },
-                "clz32" to Native { r, _, a -> r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble() },
-                "floor" to Native { _, _, a -> floor(number(a.getOrElse(0) { Undefined })) },
-                "ceil" to Native { _, _, a -> ceil(number(a.getOrElse(0) { Undefined })) },
-                "abs" to Native { _, _, a -> abs(number(a.getOrElse(0) { Undefined })) },
+                "imul" to Native { r, _, a -> JsNumber((r.int(a.getOrElse(0) { Undefined }) * r.int(a.getOrElse(1) { Undefined })).toDouble()) },
+                "clz32" to Native { r, _, a -> JsNumber(r.int(a.getOrElse(0) { Undefined }).countLeadingZeroBits().toDouble()) },
+                "floor" to Native { _, _, a -> JsNumber(floor(number(a.getOrElse(0) { Undefined }))) },
+                "ceil" to Native { _, _, a -> JsNumber(ceil(number(a.getOrElse(0) { Undefined }))) },
+                "abs" to Native { _, _, a -> JsNumber(abs(number(a.getOrElse(0) { Undefined }))) },
                 "trunc" to
                     Native { _, _, a ->
                         val n = number(a.getOrElse(0) { Undefined })
-                        if (n < 0) ceil(n) else floor(n)
+                        JsNumber(if (n < 0) ceil(n) else floor(n))
                     },
-                "max" to Native { _, _, a -> a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY },
-                "min" to Native { _, _, a -> a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY },
+                "max" to Native { _, _, a -> JsNumber(a.map(::number).maxOrNull() ?: Double.NEGATIVE_INFINITY) },
+                "min" to Native { _, _, a -> JsNumber(a.map(::number).minOrNull() ?: Double.POSITIVE_INFINITY) },
             ).mapValuesTo(mutableMapOf()) { (name, value) -> if (value is Native) value.named(name) else value },
             "Math",
         )
-    private data object Missing
 }
 
 private fun identifierProperty(name: String): Boolean = SourceIndex.identifier(name)
 
-internal fun truth(value: Any?): Boolean = when (value) { is Boolean -> value; is Double -> value != 0.0 && !value.isNaN(); is Int -> value != 0; is String -> value.isNotEmpty(); null, Undefined, Hole -> false; else -> true }
-internal fun primitive(value: Any?): Any? = when (value) { is JsDate -> value.time; is JsArray -> unsupported("Implicit array coercion is unsupported"); is JsObject -> unsupported("Implicit object coercion is unsupported"); else -> value }
-internal fun number(value: Any?): Double = if (value is Double) value else when (val v = primitive(value)) { null -> 0.0; Undefined, Hole -> Double.NaN; is Double -> v; is Int -> v.toDouble(); is Boolean -> if (v) 1.0 else 0.0; is String -> numericString(v); else -> Double.NaN }
+internal fun truth(value: JsValue): Boolean = when (value) { is JsBoolean -> value.value; is JsNumber -> value.value != 0.0 && !value.value.isNaN(); is JsString -> value.value.isNotEmpty(); JsNull, Undefined, Hole -> false; else -> true }
+internal fun primitive(value: JsValue): JsValue = when (value) { is JsDate -> JsNumber(value.time); is JsArray -> unsupported("Implicit array coercion is unsupported"); is JsObject -> unsupported("Implicit object coercion is unsupported"); else -> value }
+internal fun number(value: JsValue): Double = when (val v = primitive(value)) { JsNull -> 0.0; Undefined, Hole -> Double.NaN; is JsNumber -> v.value; is JsBoolean -> if (v.value) 1.0 else 0.0; is JsString -> numericString(v.value); else -> Double.NaN }
 private val decimalNumber = Regex("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 private fun numericString(value: String): Double {
     val s = value.trim(::jsWhitespace)
@@ -803,29 +782,30 @@ private fun numericString(value: String): Double {
     if (!decimalNumber.matches(s)) return Double.NaN
     return s.toDoubleOrNull() ?: Double.NaN
 }
-internal fun int(value: Any?): Int { val n = number(value); if (n >= -2147483648.0 && n < 2147483648.0) return n.toInt(); if (!n.isFinite() || n == 0.0) return 0; val t = if (n < 0) ceil(n) else floor(n); return (t % 4294967296.0).toLong().toInt() }
-internal fun uint(value: Any?): Long = int(value).toUInt().toLong()
-internal fun integer(value: Any?): Int { val n = number(value); return when { n.isNaN() -> 0; n >= Int.MAX_VALUE -> Int.MAX_VALUE; n <= Int.MIN_VALUE -> Int.MIN_VALUE; else -> n.toInt() } }
-internal fun relative(value: Any?, length: Int): Int { val n = integer(value); return if (n < 0) (length.toLong() + n).coerceAtLeast(0).toInt() else n.coerceAtMost(length) }
+internal fun int(value: JsValue): Int = int(number(value))
+internal fun int(n: Double): Int { if (n >= -2147483648.0 && n < 2147483648.0) return n.toInt(); if (!n.isFinite() || n == 0.0) return 0; val t = if (n < 0) ceil(n) else floor(n); return (t % 4294967296.0).toLong().toInt() }
+internal fun uint(value: Double): Long = int(value).toUInt().toLong()
+internal fun integer(n: Double): Int { return when { n.isNaN() -> 0; n >= Int.MAX_VALUE -> Int.MAX_VALUE; n <= Int.MIN_VALUE -> Int.MIN_VALUE; else -> n.toInt() } }
+internal fun relative(value: Double, length: Int): Int { val n = integer(value); return if (n < 0) (length.toLong() + n).coerceAtLeast(0).toInt() else n.coerceAtMost(length) }
 internal fun index(key: String): Int? { if (key.isEmpty() || key.length > 10 || key.length > 1 && key[0] == '0' || key.any { it !in '0'..'9' }) return null; return key.toIntOrNull()?.takeIf { it >= 0 } }
-internal fun text(value: Any?): String = when (value) {
-    is String -> value; null -> "null"; Undefined -> "undefined"; is Boolean -> value.toString(); is Int -> value.toString()
-    is Double -> when { value.isNaN() -> "NaN"; value == Double.POSITIVE_INFINITY -> "Infinity"; value == Double.NEGATIVE_INFINITY -> "-Infinity"; value == 0.0 -> "0"; abs(value) <= 9007199254740991.0 && value == floor(value) -> value.toLong().toString(); else -> unsupported("Non-integer number string coercion is unsupported") }
+internal fun text(value: JsValue): String = when (value) {
+    is JsString -> value.value; JsNull -> "null"; Undefined -> "undefined"; is JsBoolean -> value.value.toString()
+    is JsNumber -> value.value.let { n -> when { n.isNaN() -> "NaN"; n == Double.POSITIVE_INFINITY -> "Infinity"; n == Double.NEGATIVE_INFINITY -> "-Infinity"; n == 0.0 -> "0"; abs(n) <= 9007199254740991.0 && n == floor(n) -> n.toLong().toString(); else -> unsupported("Non-integer number string coercion is unsupported") } }
     is RegexValue -> unsupported("Regex string coercion requires bounded validation")
     is JsFunction -> value.code.sourceText() ?: unsupported("Function source text is unavailable")
     is Native -> "function ${value.functionName.orEmpty()}() { [native code] }"
     else -> unsupported("Unsupported string coercion")
 }
-internal fun equal(a: Any?, b: Any?, strict: Boolean): Boolean {
-    if (a === b) return a !is Double || !a.isNaN()
-    if (a is Double && b is Double) return a == b
-    if (a is String && b is String) return a == b
-    if (a is Boolean && b is Boolean) return a == b
+internal fun equal(a: JsValue, b: JsValue, strict: Boolean): Boolean {
+    if (a === b) return a !is JsNumber || !a.value.isNaN()
+    if (a is JsNumber && b is JsNumber) return a.value == b.value
+    if (a is JsString && b is JsString) return a.value == b.value
+    if (a is JsBoolean && b is JsBoolean) return a.value == b.value
     if (!strict) {
-        if (a == null || a === Undefined || b == null || b === Undefined) return (a == null || a === Undefined) && (b == null || b === Undefined)
-        if ((a is JsArray || a is JsObject || a is JsFunction || a is Native || a is JsDate) && (b is String || b is Double || b is Boolean) ||
-            (b is JsArray || b is JsObject || b is JsFunction || b is Native || b is JsDate) && (a is String || a is Double || a is Boolean)) unsupported("Implicit object equality coercion is unsupported")
-        if (a is Boolean || b is Boolean || a is Double && b is String || a is String && b is Double) return number(a) == number(b)
+        if (a === JsNull || a === Undefined || b === JsNull || b === Undefined) return (a === JsNull || a === Undefined) && (b === JsNull || b === Undefined)
+        if ((a is JsArray || a is JsObject || a is JsFunction || a is Native || a is JsDate) && (b is JsString || b is JsNumber || b is JsBoolean) ||
+            (b is JsArray || b is JsObject || b is JsFunction || b is Native || b is JsDate) && (a is JsString || a is JsNumber || a is JsBoolean)) unsupported("Implicit object equality coercion is unsupported")
+        if (a is JsBoolean || b is JsBoolean || a is JsNumber && b is JsString || a is JsString && b is JsNumber) return number(a) == number(b)
     }
     return false
 }

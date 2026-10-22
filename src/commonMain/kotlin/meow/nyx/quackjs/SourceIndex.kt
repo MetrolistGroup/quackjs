@@ -189,7 +189,7 @@ internal class SourceIndex(val source: String, className: String) {
             if (predicate is Member && predicate.key in setOf(Lit("call"), Lit("apply"))) predicate = predicate.target
             val member = predicate as? Member
             val builtin = (member?.target as? Id)?.name?.let(builtins::get)
-            val key = (member?.key as? Lit)?.value as? String
+            val key = ((member?.key as? Lit)?.value as? JsString)?.value
             val pure = builtin?.takeIf { key != null && key in readOnlyPredicates.getValue(it) }
             val reverse = if (target is Member && target.target is Id && target.key == Lit("reverse") && call.statement) {
                 val after = scans.next(Lexer(source, refs.end), ")")
@@ -202,11 +202,11 @@ internal class SourceIndex(val source: String, className: String) {
         val reassigned = writeCounts.filterValues { it > 1 }.keys
         val explicit = memberWrites.map { it.first.lhs.first().text }.toSet() + updated + reassigned
         fun ownSlot(expr: Expr?): Boolean = expr is Member && expr.target is Id && expr.key is Lit && expr.key.value.let {
-            it == null || it is String || it is Double || it is Boolean
-        } && expr.key.value != "length"
+            it === JsNull || it is JsString || it is JsNumber || it is JsBoolean
+        } && expr.key.value != JsString("length")
         val deepWrites = memberWrites.filter { !ownSlot(it.second) }.map { it.first.lhs.first().text }
         val changedLookups = (updated + reassigned + memberWrites.filter {
-            !ownSlot(it.second) || ((it.second as? Member)?.key as? Lit)?.value in setOf("reverse", "__proto__")
+            !ownSlot(it.second) || ((it.second as? Member)?.key as? Lit)?.value in setOf(JsString("reverse"), JsString("__proto__"))
         }.map { it.first.lhs.first().text }).toMutableSet()
         val changedQueue = ArrayDeque(changedLookups)
         while (changedQueue.isNotEmpty()) for (alias in aliases[changedQueue.removeFirst()].orEmpty()) if (changedLookups.add(alias)) changedQueue.addLast(alias)
@@ -266,7 +266,7 @@ internal class SourceIndex(val source: String, className: String) {
         if (resolving.size >= 64 || !resolving.add(name)) return DefinitionKind.UNKNOWN
         try {
             fun kind(expr: Expr): DefinitionKind = when (expr) {
-                is Lit -> if (expr.value == null || expr.value is String || expr.value is Double || expr.value is Boolean) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
+                is Lit -> if (expr.value === JsNull || expr.value is JsString || expr.value is JsNumber || expr.value is JsBoolean) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
                 is Id -> definitionKind(expr.name, known, scans, nativeSplit, resolving)
                 is ArrayExpr -> DefinitionKind.ARRAY
                 is Unary -> if (expr.op in setOf("!", "~", "+", "-", "typeof", "void", "delete")) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
@@ -277,7 +277,7 @@ internal class SourceIndex(val source: String, className: String) {
                 }
                 is Conditional -> kind(expr.yes).takeIf { it == kind(expr.no) } ?: DefinitionKind.UNKNOWN
                 is Member -> if (expr.key == Lit("length") && kind(expr.target) == DefinitionKind.ARRAY) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
-                is Call -> if (nativeSplit && !expr.construct && expr.fn is Member && expr.fn.target is Lit && expr.fn.target.value is String && expr.fn.key == Lit("split") && expr.args.all { it is Lit }) DefinitionKind.ARRAY else DefinitionKind.UNKNOWN
+                is Call -> if (nativeSplit && !expr.construct && expr.fn is Member && expr.fn.target is Lit && expr.fn.target.value is JsString && expr.fn.key == Lit("split") && expr.args.all { it is Lit }) DefinitionKind.ARRAY else DefinitionKind.UNKNOWN
                 else -> DefinitionKind.UNKNOWN
             }
             val entries = names[name]
@@ -431,7 +431,7 @@ internal class SourceIndex(val source: String, className: String) {
             val parent = target.target as? Member ?: continue
             val root = parent.target as? Member ?: continue
             if (root.target != Id("g") || root.key != Lit(name)) continue
-            if (runtime.expression(parent.key) == "prototype" && runtime.expression(target.key) == methodName) {
+            if (runtime.expression(parent.key) == JsString("prototype") && runtime.expression(target.key) == JsString(methodName)) {
                 methods.add(parseAt(entry.offset) as? FunctionExpr ?: unsupported("Invalid n method"))
             }
         }

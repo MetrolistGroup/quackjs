@@ -2,7 +2,6 @@ package meow.nyx.quackjs
 
 import kotlin.random.Random
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -16,11 +15,11 @@ class HotCharacterPlanLane27Test {
     private data class State(val runtime: Runtime, val env: Env, val outer: Env, val arrays: List<JsArray>)
     private fun state(code: FunctionExpr, alphabet: List<Any?> = listOf("a", "b", "c"), seed: List<Any?> = listOf("b"), input: List<Any?> = listOf("a"), remaining: Any? = 3.0, alias: Int = 0): State {
         val runtime = Runtime(source)
-        val table = JsArray(alphabet.toMutableList())
-        val self = if (alias == 1 || alias == 3) table else JsArray(seed.toMutableList())
-        val target = if (alias == 2) table else if (alias == 3 || alias == 4) self else JsArray(input.toMutableList())
-        val outer = Env().also { it.values.putAll(mapOf("e" to table, "r" to remaining, "keys" to JsArray(mutableListOf("push", "indexOf", "length")), "mask" to 7.0)) }
-        val env = runtime.functionEnv(JsFunction(code, outer), self, listOf(target.values[0], 0.0, target))
+        val table = JsArray(alphabet.map(::testJsValue).toMutableList())
+        val self = if (alias == 1 || alias == 3) table else JsArray(seed.map(::testJsValue).toMutableList())
+        val target = if (alias == 2) table else if (alias == 3 || alias == 4) self else JsArray(input.map(::testJsValue).toMutableList())
+        val outer = Env().also { it.values.putAll(mapOf("e" to table, "r" to testJsValue(remaining), "keys" to JsArray(mutableListOf(JsString("push"), JsString("indexOf"), JsString("length"))), "mask" to JsNumber(7.0))) }
+        val env = runtime.functionEnv(JsFunction(code, outer), self, listOf(target.values[0], JsNumber(0.0), target))
         return State(runtime, env, outer, listOf(table, self, target))
     }
     private fun compare(code: FunctionExpr, alphabet: List<Any?> = listOf("a", "b", "c"), seed: List<Any?> = listOf("b"), input: List<Any?> = listOf("a"), remaining: Double = 3.0, alias: Int = 0) {
@@ -55,20 +54,20 @@ class HotCharacterPlanLane27Test {
         val plan = assertNotNull(callback.hotCharacterPlan)
         for ((name, value) in listOf("e" to "abc", "e" to JsObject(), "r" to "3", "r" to Undefined)) {
             val s = state(callback)
-            s.outer[name] = value
+            s.outer[name] = testJsValue(value)
             assertFalse(plan.execute(s.runtime, s.env))
             assertEquals(listOf<Any?>("a"), s.arrays[2].values)
             assertEquals(value, s.outer[name])
         }
         for (value in listOf(-1.0, 0.5, Double.NaN, Double.POSITIVE_INFINITY, 2.0)) {
             val s = state(callback)
-            s.env.slots[callback.parameterSlots[1]] = value
+            s.env.slots[callback.parameterSlots[1]] = JsNumber(value)
             assertFalse(plan.execute(s.runtime, s.env))
             assertEquals(3.0, s.outer["r"])
         }
         for ((array, method) in listOf(0 to "indexOf", 1 to "push")) {
             val s = state(callback)
-            s.arrays[array].fields[method] = Native { _, _, _ -> -1.0 }
+            s.arrays[array].fields[method] = Native { _, _, _ -> JsNumber(-1.0) }
             assertFalse(plan.execute(s.runtime, s.env))
             assertEquals(3.0, s.outer["r"])
             // The interpreter still executes an overridden method rather than assuming the built-in.
@@ -77,13 +76,13 @@ class HotCharacterPlanLane27Test {
         }
         for ((slot, value) in listOf(callback.thisSlot to JsObject(), callback.parameterSlots[0] to "long", callback.parameterSlots[2] to "array")) {
             val s = state(callback)
-            s.env.slots[slot] = value
+            s.env.slots[slot] = testJsValue(value)
             assertFalse(plan.execute(s.runtime, s.env))
             assertEquals(3.0, s.outer["r"])
         }
         val keyed = code(body.replace(".push", "[keys[0]]"))
         val s = state(keyed)
-        (s.outer["keys"] as JsArray).values[0] = "pop"
+        (s.outer["keys"] as JsArray).values[0] = JsString("pop")
         assertFalse(assertNotNull(keyed.hotCharacterPlan).execute(s.runtime, s.env))
     }
 
@@ -109,7 +108,7 @@ class HotCharacterPlanLane27Test {
         for (fast in listOf(false, true)) {
             val callback = code(if (fast) body else ";$body")
             val s = state(callback, seed = List(65_536) { "b" })
-            assertFailsWith<UnsupportedPlayerException> { s.runtime.invoke(JsFunction(callback, s.outer), s.arrays[1], listOf("a", 0.0, s.arrays[2])) }
+            assertFailsWith<UnsupportedPlayerException> { s.runtime.invoke(JsFunction(callback, s.outer), s.arrays[1], listOf(JsString("a"), JsNumber(0.0), s.arrays[2])) }
             val expr = """(function(){
                 var e=['a','b','c'],r=3,callback=function(v,i,a){${if (fast) body else ";$body"}};
                 var recurse=function(n){if(n)return ${"! ".repeat(8)}recurse(n-1);callback.call(['b'],'a',0,['a']);return 0};
@@ -126,7 +125,7 @@ class HotCharacterPlanLane27Test {
             assertNotNull(code(callbackBody).hotCharacterPlan)
             // Callback entry depths 244..249 straddle the plan boundary and interpreter limit.
             for (padding in 7..12) {
-                fun evaluate(fast: Boolean): Result<Any?> = runCatching {
+                fun evaluate(fast: Boolean): Result<JsValue> = runCatching {
                     val expr = """(function(){
                         var e=['a','b','c'],r=3,keys=['push','indexOf','length'],mask=7;
                         var callback=function(v,i,a){${if (fast) callbackBody else ";$callbackBody"}};

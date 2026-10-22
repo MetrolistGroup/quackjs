@@ -1,14 +1,13 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AssignmentReferencesLane09Test {
     private fun parse(source: String): Expr = Parser(Lexer(source).tokens()).completeExpression()
     private fun runtime(): Runtime = Runtime(SourceIndex("g.C=function(){};", "C"))
-    private fun evaluate(body: String): Any? {
+    private fun evaluate(body: String): JsValue {
         val runtime = runtime()
         return runtime.invoke(runtime.function(parse("function(){$body}") as FunctionExpr), Undefined, emptyList())
     }
@@ -68,7 +67,7 @@ class AssignmentReferencesLane09Test {
         val id = Id("counter")
         val reader = runtime.function(FunctionExpr(emptyList(), Block(listOf(ReturnStmt(id)))))
         id.globalSlot = 0
-        fun read(): Any? = runtime.invoke(reader, Undefined, emptyList())
+        fun read(): JsValue = runtime.invoke(reader, Undefined, emptyList())
         assertEquals(1.0, read())
         for ((operation, expected) in listOf("counter=4" to 4.0, "counter+=3" to 7.0, "counter++" to 8.0, "--counter" to 7.0)) {
             runtime.expression(parse(operation))
@@ -79,7 +78,7 @@ class AssignmentReferencesLane09Test {
     @Test fun mutationPathsKeepTheirStepAndSizeBudgets() {
         val target = Id("value").also { it.slot = 0 }
         val env = Env(names = mapOf("value" to 0))
-        val array = JsArray(mutableListOf(3.0))
+        val array = JsArray(mutableListOf(JsNumber(3.0)))
         val member = Member(Lit(array), Lit(0.0))
         val cases = listOf(
             Binary("=", target, Lit(2.0)) to 2,
@@ -92,7 +91,7 @@ class AssignmentReferencesLane09Test {
         )
         for ((expression, cost) in cases) {
             val runtime = runtime()
-            env.slots[0] = "123"
+            env.slots[0] = JsString("123")
             runtime.tick(2_000_000 - cost)
             runtime.eval(expression, env)
             assertTrue(assertFailsWith<UnsupportedPlayerException> { runtime.tick() }.message!!.contains("step limit"))
@@ -100,7 +99,7 @@ class AssignmentReferencesLane09Test {
         for (operation in listOf("a[65536]=1", "a[65536]++", "a.length+=65537")) {
             assertTrue(assertFailsWith<UnsupportedPlayerException> { evaluate("var a=[];$operation;return a;") }.message!!.contains("limit"), operation)
         }
-        val undeclaredEnv = Env().also { it["sentinel"] = 0.0 }
+        val undeclaredEnv = Env().also { it["sentinel"] = JsNumber(0.0) }
         assertFailsWith<UnsupportedPlayerException> { runtime().eval(parse("missing=(sentinel=1)"), undeclaredEnv) }
         assertEquals(0.0, undeclaredEnv["sentinel"])
     }

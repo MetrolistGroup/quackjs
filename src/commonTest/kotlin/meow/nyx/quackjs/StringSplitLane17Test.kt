@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -9,7 +8,7 @@ class StringSplitLane17Test {
     private fun runtime() = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
 
     private fun split(runtime: Runtime, value: Any?, args: List<Any?>): JsArray =
-        runtime.invoke(runtime.get("", "split"), value, args) as JsArray
+        runtime.invoke(runtime.get(JsString(""), "split"), testJsValue(value), args.map(::testJsValue)) as JsArray
 
     @Test fun emptySeparatorSplitsUtf16UnitsIncludingNulAndLoneSurrogates() {
         val input = (0..255).map { it.toChar() }.joinToString("") + "\u0100\ud800\udc00\ud83d\ude00\uffff"
@@ -69,15 +68,15 @@ class StringSplitLane17Test {
             val first = split(runtime, "a,b", listOf(separator))
             val second = split(runtime, "a,b", listOf(separator))
             val expected = second.values.toList()
-            first.values[0] = "changed"
-            first.values.add("extra")
+            first.values[0] = JsString("changed")
+            first.values.add(JsString("extra"))
             first.values.removeAt(1)
             assertEquals(expected, second.values)
         }
-        val input = mutableListOf<Any?>("a", "b")
+        val input = mutableListOf<JsValue>(JsString("a"), JsString("b"))
         val copy = runtime().array(input.subList(0, 1))
-        input[0] = "changed"
-        copy.values.add("extra")
+        input[0] = JsString("changed")
+        copy.values.add(JsString("extra"))
         assertEquals<List<Any?>>(listOf("a", "extra"), copy.values)
         assertEquals<List<Any?>>(listOf("changed", "b"), input)
     }

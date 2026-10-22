@@ -1,7 +1,6 @@
 package meow.nyx.quackjs
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -9,7 +8,7 @@ import kotlin.test.assertTrue
 class SmallArityCallsLane10Test {
     private fun runtime() = Runtime(SourceIndex("var g={};g.C=function(){};", "C"))
 
-    private fun evaluate(body: String): Any? = runtime().expression(
+    private fun evaluate(body: String): JsValue = runtime().expression(
         Parser(Lexer("(function(){$body})()").tokens()).completeExpression()
     )
 
@@ -90,16 +89,16 @@ class SmallArityCallsLane10Test {
             repeat(30) { runtime.allocate(65_536) }
             runtime.allocate(33_888 - arity)
             val fn = Native { _, self, args ->
-                assertSame(if (call) null else Undefined, self)
-                args.size
+                assertSame(if (call) JsNull else Undefined, self)
+                JsNumber(args.size.toDouble())
             }
             val args = List(arity) { Lit(it.toDouble()) }
-            val expr = if (call) Call(Member(Lit(fn), Lit("call")), listOf(Lit(null)) + args) else Call(Lit(fn), args)
-            assertEquals(arity, runtime.expression(expr))
+            val expr = if (call) Call(Member(Lit(fn), Lit("call")), listOf(Lit(JsNull)) + args) else Call(Lit(fn), args)
+            assertEquals(arity.toDouble(), runtime.expression(expr))
             assertTrue(assertFailsWith<UnsupportedPlayerException> { runtime.allocate(0) }.message!!.contains("Allocation limit"))
         }
         val runtime = runtime()
-        val fn = Native { _, self, args -> assertSame(Undefined, self); assertTrue(args.isEmpty()); "empty" }
+        val fn = Native { _, self, args -> assertSame(Undefined, self); assertTrue(args.isEmpty()); JsString("empty") }
         assertEquals("empty", runtime.expression(Call(Member(Lit(fn), Lit("call")), emptyList())))
     }
 }

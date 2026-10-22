@@ -2,7 +2,7 @@ package meow.nyx.quackjs
 
 /** Left-associative chains do not consume parser recursion, but still need an AST depth cap. */
 internal fun validateDepth(root: Expr) {
-    val pending = ArrayDeque<Pair<Any, Int>>()
+    val pending = ArrayDeque<Pair<SyntaxNode, Int>>()
     pending.addLast(root to 0)
     var nodes = 0
     while (pending.isNotEmpty()) {
