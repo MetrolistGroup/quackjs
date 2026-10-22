@@ -2,12 +2,17 @@
 // Execute the complete, hash-pinned players. Never import the Kotlin implementation.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const fixtures = new URL('../fixtures/', import.meta.url);
 const read = name => readFileSync(new URL(name, fixtures), 'utf8');
+const readPlayer = name => {
+    const bytes = readFileSync(new URL(name, fixtures));
+    return name.endsWith('.gz') ? gunzipSync(bytes).toString('utf8') : bytes.toString('utf8');
+};
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const manifest = JSON.parse(read('manifest.json'));
 const globals = read('oracle-globals.js');
@@ -43,7 +48,7 @@ function challenges() {
 }
 
 function solve(player, inputs) {
-    const code = read(player.file);
+    const code = readPlayer(player.file);
     assert.equal(Buffer.byteLength(code), player.bytes, `${player.id}: size mismatch`);
     assert.equal(sha256(code), player.sha256, `${player.id}: SHA-256 mismatch`);
     assert.match(player.signatureExpression, /^[A-Za-z0-9_$]+\(\d+,\d+,INPUT\)$/);
@@ -84,8 +89,8 @@ const players = manifest.players.map(player => solve(player, inputs));
 assert.deepEqual(challenges(), inputs);
 assert.deepEqual(manifest.players.map(player => solve(player, inputs)), players);
 for (const kind of ['signature', 'n']) {
-    assert.equal(new Set(players.map(p => JSON.stringify(p[kind].map(c => c.output)))).size, players.length,
-        `${kind}: selected players must have materially different transforms`);
+    assert.ok(new Set(players.map(p => JSON.stringify(p[kind].map(c => c.output)))).size >= Math.min(3, players.length),
+        `${kind}: fixture set must cover at least three materially different transforms`);
 }
 const goldens = { schemaVersion: 1, oracle: { engine: 'node', version: process.version, globalsSha256: sha256(globals) }, players };
 const path = new URL('goldens.json', fixtures);

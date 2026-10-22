@@ -37,12 +37,13 @@ commits `1fe788e77ef9c67619fd1d890b55497c3fc61964` (415 entries) and
 | `10733253` | local | `dS(7,2166,INPUT)` | `np` | 20699 |
 | `eb27e5fd` | local, supplied fixture | `Su(11,3932,INPUT)` | `cg` | 20724 |
 | `5008be0a` | public, latest entry | `Gl(17,1452,INPUT)` | `Fl` | 20746 |
+| `60869856` | public registry | `xD(28,4062,INPUT)` | `n7` | 20690 |
 | `55de7e60` | live download, source landmarks | `zl(17,5122,INPUT)` | `Gx` | 20745 |
 
-All five use `player_ias.vflset/en_GB/base.js`; hints are variant-specific. The
-corpus is about 14.7 MB of full players, not extracted lookalikes. Node checks
-that each player's signature-output and n-output vectors differ from the others.
-These five dispatcher/table players do not establish general JavaScript support
+All six use `player_ias.vflset/en_GB/base.js`; hints are variant-specific. The
+corpus contains 17,598,814 bytes of full players, not extracted lookalikes. Node
+checks source hashes and requires at least three distinct output vectors per
+transform; valid variants may share identical transforms. These six dispatcher/table players do not establish general JavaScript support
 or compatibility with all archived/future players. No credentials, cookies,
 stream URLs or private challenges are used.
 
@@ -57,7 +58,7 @@ verified transforms requires it; no deterministic substitute is supplied.
 ## Independent oracle
 
 [`goldens.json`](../fixtures/goldens.json) contains 16 signature and 15 n cases
-per player: **155 independently derived outputs**. Synthetic inputs include the
+per player: **186 independently derived outputs**. Synthetic inputs include the
 base64url alphabet/reversal, repeated/alternating characters and xorshift32 seed
 `0x51a7c0de`. Signature lengths span 16–255 and n lengths 15–128, including nearby
 boundaries and the Faraday `KdrqFlzJXl9EcCwlmEy` probe. The deterministic generator

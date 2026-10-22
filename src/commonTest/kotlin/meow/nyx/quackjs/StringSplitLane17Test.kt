@@ -35,7 +35,7 @@ class StringSplitLane17Test {
             assertEquals<List<Any?>>(listOf("a", "b", "c"), split(runtime(), "abc", listOf("", limit)).values)
         }
         assertEquals(emptyList(), split(runtime(), "abc", listOf(JsObject(), 0.0)).values)
-        assertFailsWith<UnsupportedPlayerException> { split(runtime(), "abc", listOf("", JsObject())) }
+        assertEquals(emptyList(), split(runtime(), "abc", listOf("", JsObject())).values)
         assertFailsWith<UnsupportedPlayerException> { split(runtime(), "abc", listOf(RegexValue("/a/"), 0.0)) }
         assertFailsWith<UnsupportedPlayerException> { split(runtime(), "abc", listOf(JsObject())) }
     }

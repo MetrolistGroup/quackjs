@@ -258,7 +258,7 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     private fun targetExpression(tokens: List<Token>): Expr? =
-        try { Parser(tokens + Token("<eof>", -1)).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+        try { Parser(tokens + Token("<eof>", -1), source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
 
     /** Prove initializer value kinds without executing unrelated player code. */
     private fun definitionKind(name: String, known: MutableMap<String, DefinitionKind>, scans: ScanBudget, nativeSplit: Boolean, resolving: MutableSet<String> = mutableSetOf()): DefinitionKind {
@@ -290,7 +290,7 @@ internal class SourceIndex(val source: String, className: String) {
                 if (first.kind == 0 && first.text in setOf("function", "{")) DefinitionKind.UNKNOWN
                 else {
                     val tokens = slice(offset, scans)
-                    val expr = try { Parser(tokens).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+                    val expr = try { Parser(tokens, source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
                     expr?.let(::kind) ?: DefinitionKind.UNKNOWN
                 }
             }
@@ -395,7 +395,7 @@ internal class SourceIndex(val source: String, className: String) {
         return parseAt(entries.single().offset)
     }
 
-    fun parseAt(offset: Int): Expr = Parser(slice(offset)).completeExpression()
+    fun parseAt(offset: Int): Expr = Parser(slice(offset), source).completeExpression()
 
     private fun slice(offset: Int, scans: ScanBudget? = null): List<Token> {
         val lexer = Lexer(source, offset)
@@ -427,7 +427,7 @@ internal class SourceIndex(val source: String, className: String) {
         val methods = mutableListOf<FunctionExpr>()
         for (entry in assignments) {
             if (entry.lhs.take(3).map(Token::text) != listOf("g", ".", name) || entry.lhs.size == 3) continue
-            val target = Parser(entry.lhs + Token("<eof>", -1)).completeExpression() as? Member ?: continue
+            val target = Parser(entry.lhs + Token("<eof>", -1), source).completeExpression() as? Member ?: continue
             val parent = target.target as? Member ?: continue
             val root = parent.target as? Member ?: continue
             if (root.target != Id("g") || root.key != Lit(name)) continue

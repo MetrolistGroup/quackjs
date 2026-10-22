@@ -553,6 +553,33 @@ class PlayerProgramTest {
         """.trimIndent()).decipherSignature("x"))
     }
 
+    @Test fun arraysUseJoinForPrimitiveStringAndNumericCoercion() {
+        assertEquals("1,,,2,3", compile("return String([1,,null,[2,3]]);").decipherSignature("x"))
+        assertEquals("1,2!", compile("return [1,2]+'!';").decipherSignature("x"))
+        assertEquals("0:12:NaN:0:true", compile("return [Number([]),Number([12]),Number([1,2]),[]|0,['b']<'c'].join(':');").decipherSignature("x"))
+        assertEquals("", compile("var a=[];a.push(a);return String(a);").decipherSignature("x"))
+        assertEquals("1,,2", compile("var a=[1,,2];return a.toString();").decipherSignature("x"))
+        assertEquals("1,2;3", compile("return [[1,2],[3]].join(';');").decipherSignature("x"))
+        assertEquals("[object Object]:NaN:12:12", compile("return [String([{}]),String(Number([{}])),Number([{toString:function(){return '12'}}]),String([{toString:function(){return '12'}}])].join(':');").decipherSignature("x"))
+        assertEquals("12:12:12:12:12", compile("var inner=[1];inner.toString=function(){return '12'};return [String(inner),String([inner]),[inner].join('|'),Number([inner]),Number([[inner]])].join(':');").decipherSignature("x"))
+        assertEquals("[object Object]:1[object Object]2", compile("return String({})+':'+[1,2].join({});").decipherSignature("x"))
+        assertEquals("caught", compile("var value={toString:function(){return {}}};try{return String([value]);}catch(e){return 'caught';}").decipherSignature("x"))
+    }
+
+    @Test fun arrayNumberCoercionWithCallableElementsProducesNaN() {
+        val program = compile("return String(+[[function(){}]])+':'+String(+[1])+':'+String(+[])+':'+x;")
+        assertEquals("NaN:1:0:seed", program.decipherSignature("seed"))
+    }
+
+    @Test fun arrayNumberCoercionHonorsValueOfOrderAndSideEffects() {
+        assertEquals("12", compile("var a=[function(){}];a.valueOf=function(){return 12};return String(Number(a));").decipherSignature("x"))
+        assertEquals("13:vt", compile("var log='';var a=[1];a.valueOf=function(){log+='v';return {}};a.toString=function(){log+='t';return '13'};return Number(a)+':'+log;").decipherSignature("x"))
+        assertEquals("NaN:x", compile("var log='';var a=[{toString:function(){log+='x';return '1'}},function(){}];return Number(a)+':'+log;").decipherSignature("x"))
+        assertEquals("function(){}", compile("return String([function(){}]);").decipherSignature("x"))
+        assertEquals("function pow() { [native code] }", compile("return String([Math.pow]);").decipherSignature("x"))
+        assertEquals("[object Array]", compile("var a=[1];a.join=null;return String(a);").decipherSignature("x"))
+    }
+
     @Test fun nullEqualityAndNumericWhitespaceMatchJavaScript() {
         assertEquals("false:false:false:true:false:1:NaN:NaN", compile("return [false==null,0==null,''==null,null==undefined,null===undefined,Number('\\ufeff1'),Number('\\u001c1'),Number('0x\\uff11')].join(':');").decipherSignature("x"))
         assertEquals("1:1:1:1", compile("return [Number('\\u00a01'),Number('\\u16801'),Number('\\u20001'),Number('\\u202f1')].join(':');").decipherSignature("x"))

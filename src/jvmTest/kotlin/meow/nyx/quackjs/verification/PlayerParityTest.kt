@@ -13,6 +13,7 @@ class PlayerParityTest {
     @Test fun suppliedPlayer() = verify("eb27e5fd")
 
     @Test fun latestPublicRegistryPlayer() = verify("5008be0a")
+    @Test fun publicPlayerWithCallableArrayNumericCoercion() = verify("60869856")
 
     @Test fun mathPowRegressionPlayer() {
         verify("55de7e60")
