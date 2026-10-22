@@ -46,8 +46,11 @@ throw `UnsupportedPlayerException`; fail closed, never return an encrypted URL a
 if deciphering succeeded. Limits include 8 Mi UTF-16 source units, 16,384-unit
 challenges and 65,536-unit outputs, not a hard wall-clock deadline.
 
-Verification covers six complete players, not every historical/future player.
-Live playback, Android hardware and Apple execution/final linking are unverified.
+Default offline verification covers six complete players. An opt-in pinned
+Faraday latest-200 corpus records 176/200 passing on the documented baseline;
+see verification for failures and rerun commands. This does not cover every
+historical/future player. Live playback, Android hardware and Apple
+execution/final linking are unverified.
 See [verification](docs/verification.md), [measured benchmarks](docs/benchmark.md),
 [architecture](DESIGN.md) and [fixture provenance](fixtures/manifest.json).
 

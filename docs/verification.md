@@ -22,6 +22,149 @@ node scripts/player-oracle.mjs
 is not a full library parity pass. Benchmarks are opt-in, not part of `jvmTest`:
 see [commands, timing boundaries and measured results](benchmark.md).
 
+## Opt-in Faraday latest-200 cohort
+
+This larger corpus is independent of the five offline fixtures below. It pins
+[MetrolistGroup/faraday](https://github.com/MetrolistGroup/faraday/tree/882624d59ccd921aa4cbf528e046ae61e137be47)
+commit `882624d59ccd921aa4cbf528e046ae61e137be47`. All 438 registry players are
+validated and have release records. Select the **200 distinct player hashes** by
+release `generatedAt` descending, then player hash ascending (ASCII) on ties.
+`generatedAt` records successful derivation/validation and may be newer than
+`firstSeenAt`; neither config insertion order nor lexical hash order establishes
+recency. The endpoints are `3f99f1e0` (`2026-10-22T18:07:26.380Z`) and
+`9c9b2502` (`2026-08-31T13:07:22.286Z`).
+
+[`fixtures/faraday-200/manifest.json`](../fixtures/faraday-200/manifest.json)
+pins exact URLs, source SHA-256, release times, signature expressions, n wrappers,
+timestamps and primary config hashes (including alias resolution). Provenance
+includes the complete registry/config file hashes, each selected release file
+hash and a digest of **all 438** release file hashes. The public git-object audit
+checks registry/release URL/hash agreement and unique primary-or-alias hints.
+It never reads the Faraday working tree, `.env`, cookies or playback credentials.
+All 200 selected URLs are the original `player_ias.vflset/en_GB/base.js` variant.
+
+### Ordinary read-only verification
+
+Node 26 and JDK 21 were used for the recorded run. No additional dependencies are
+introduced. Only the explicit download command needs public player HTTP access;
+Gradle may still need its normal toolchain/dependency downloads.
+
+```sh
+node --test scripts/faraday-200.test.mjs
+# Optional provenance audit against public objects in an existing Faraday clone:
+node scripts/faraday-200.mjs provenance --faraday=/path/to/faraday
+
+# Four downloads at a time, 90s timeout per attempt, at most three attempts,
+# 100,000-byte minimum and 8 MiB maximum. Every cached/downloaded file is hashed.
+node scripts/faraday-200.mjs download
+# Read-only: execute every full original source twice in fresh Node VM contexts.
+node scripts/faraday-200.mjs oracle
+# Offline inputs: compile and compare with the independently derived stored outputs.
+./gradlew --no-daemon --max-workers=2 faraday200Verification --console=plain
+```
+
+The ~593 MB source cache is ignored at `build/faraday-200/sources`; it is not
+200 tracked JS fixtures. Keep it outside a directory removed by `gradlew clean`
+if desired: pass the same absolute directory to Node `--cache=/path/to/cache`
+and Gradle `-PfaradayCache=/path/to/cache`. Node reports default to
+`<cache>/download-report.json` and `<cache>/oracle-report.json`; override with
+`--report=/path/to/report.json`. The JVM report defaults to
+`<cache>/jvm-report.json`; override with `-PfaradayReport=/path/to/report.json`.
+
+The JVM entrypoint loads **one source at a time**, checks its size/hash and
+compiles it separately with hints and without hints. Each successful compilation
+compares all 16 signature + 15 n outputs in forward/reverse/forward order on the
+same program. The first eight successful **distinct primary configs per mode**
+also run four simultaneous workers, each checking all 31 cases twice. Source, oracle,
+compile and parity failures are recorded per player/mode; hint-free landmark
+ambiguity has its own category and never counts as success. Every player gets a
+status, the report is updated after each, and any failed mode makes the task
+exit nonzero **after** the complete cohort. JVM/OS termination cannot guarantee
+a complete report; check `completed == 200`. Default `jvmTest` neither downloads
+nor executes this corpus.
+
+The shared full-player oracle injects only the registry signature export and the
+**original URL-wrapper n export** before the unique `})(_yt_player);` trailer,
+using the existing `oracle-globals.js`. Shared deterministic inputs are identical
+to the offline corpus: base64url/reversed/repeated/alternating/seeded boundary
+lengths, including 86-character signatures and the Faraday n probe. It rejects
+thrown, missing, non-string, unchanged or invalid/sentinel n results. There are
+**6,200 independently derived stored outputs**, with source, manifest and globals
+hashes binding their provenance. No Kotlin output, extracted transform, custom
+replacement or catch-return-input path generates an expectation. Fresh contexts
+must agree before regeneration succeeds. Each globals, full-player and transform
+batch evaluation has a 30s timeout. **Node VM is not a security sandbox**; use
+only the pinned public corpus in an appropriately isolated environment.
+
+### Intentional metadata/golden regeneration
+
+Ordinary verification never rewrites goldens. These commands are explicit
+maintenance operations, not fixes for a failed download/oracle/parity check:
+
+```sh
+node scripts/faraday-200.mjs manifest --faraday=/path/to/faraday
+node scripts/faraday-200.mjs oracle --write
+```
+
+Manifest reconstruction reads only the pinned commit and validates its known
+registry/config hashes, count and cohort endpoints. Golden regeneration replaces
+the file only after **all 200** sources and fresh-context oracle checks succeed.
+A missing URL, wrong hash or failing oracle is a failure: do not change variants,
+substitute another player, refresh to a later snapshot or accept new bytes.
+After production runtime fixes merge, rerun the ordinary commands against the
+**unchanged** manifest/goldens; reuse the source cache. There is no expected-fail
+allowlist or flag that turns known incompatibilities into passes.
+
+### Recorded baseline, 2026-10-22
+
+Runtime baseline `1cd3770` includes the regex-after-`else` lexer fix but not the
+subsequent n-transform compatibility fix. The actual network/oracle/JVM run gave:
+
+| Check | Passed | Failed |
+| --- | ---: | ---: |
+| Exact downloads and SHA-256 | 200 | 0 |
+| Full-source Node golden generation, two fresh contexts | 200 | 0 |
+| Read-only Node golden verification, two fresh contexts | 200 | 0 |
+| JVM hinted compile + all outputs/repeats | 176 | 24 |
+| JVM hint-free compile + all outputs/repeats | 176 | 24 |
+
+There were **no unavailable downloads**, no oracle failures, no parity failures
+among compiled programs, and no hint-free landmark ambiguities. All 24 failures
+in **both** modes were `UnsupportedPlayerException: Cannot isolate n transform:
+Implicit array coercion is unsupported`, at compilation, for:
+
+```text
+0ed38f41 8f9b066a b6eda4df 52726943 e29a2e88 40dba4d7
+24c7e547 6e539070 99afa6f1 adbaabd3 a9596022 73252d67
+3dc7ccf6 f2999a12 c4fd1fc7 93572bf8 1f293754 92b29aca
+ccb8b03c 7460dd14 b9553db2 48ca10b5 82f45653 12502845
+```
+
+The JVM task correctly failed, with all 200 statuses retained. Each mode checked
+16,368 sequential outputs and passed concurrent reuse on eight successful
+players with distinct primary configs (1,984 additional comparisons per mode). These are known
+runtime incompatibilities, not accepted verifier exceptions. This establishes
+**176/200 in both modes**, not 200/200 Kotlin compatibility.
+
+Local exhaustive evidence is retained under `/tmp/quackjs-integration/faraday-200/`:
+`download-report.json`, `oracle-generation-report.json`,
+`oracle-readonly-report.json`, `jvm-baseline-report.json`, and their logs. These
+local reports/cache are not shipped; the pinned manifest and goldens are tracked.
+The five Node self-checks cover ordering/ties, primary/alias uniqueness,
+registry/release provenance disagreement, source bounds/hash failures, oracle
+failure rejection and exhaustive missing-source reporting without rewriting
+goldens. A separate JVM negative check against an empty source cache reported
+all 200 as failures in both modes and exited nonzero (`missing-source-report.json`).
+All 117 default JVM tests also passed separately.
+
+This is transform parity for synthetic valid challenges on this exact snapshot,
+not live playback, all input semantics, general JS support or future-player
+compatibility. The 200 IDs may share byte-identical player implementations;
+recency and distinctness are Faraday player hashes, not 200 unique algorithms.
+No QuickJS cross-engine pass was run on this larger corpus. Production remains
+common Kotlin + stdlib only; Node and existing JVM test dependencies are
+verification tools, never runtime dependencies.
+
 ## Corpus and provenance
 
 [`fixtures/manifest.json`](../fixtures/manifest.json) pins each complete,
