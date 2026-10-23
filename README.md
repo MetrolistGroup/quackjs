@@ -38,6 +38,30 @@ Cache by exact player variant and hints. Programs support concurrent calls.
 once. Never interpolate challenges into expressions. Compilation and transforms
 are synchronous; move CPU work off the UI thread.
 
+For format lists, the next build also provides ordered batches (not in `0.1.2`):
+
+```kotlin
+import meow.nyx.quackjs.PlayerChallenge
+import meow.nyx.quackjs.PlayerTransformResult
+
+val results = program.transformBatch(listOf(
+    PlayerChallenge.Signature(encryptedSignature),
+    PlayerChallenge.N(nChallenge),
+    PlayerChallenge.N(nChallenge), // Reuses this batch's result, including failures.
+))
+for (result in results) when (result) {
+    is PlayerTransformResult.Success -> useDecodedOutput(result.value)
+    is PlayerTransformResult.Failure -> recordFailure(result.message)
+}
+```
+
+Batches accept at most 256 entries. Each distinct kind/input runs once; no results
+are retained between batches. Individual unsupported transforms produce `Failure`
+while other entries continue. An oversized batch throws before processing.
+Coroutine callers can pass `checkCancellation = { coroutineContext.ensureActive() }`;
+the callback runs before every entry, including duplicates, and its exceptions
+propagate unchanged. An individual transform remains synchronous and bounded.
+
 ## Scope and limits
 
 This is a bounded dispatcher/table-player subset, **not general JavaScript** or

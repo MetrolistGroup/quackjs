@@ -17,7 +17,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import meow.nyx.quackjs.PlayerHints
+import meow.nyx.quackjs.PlayerChallenge
 import meow.nyx.quackjs.PlayerProgram
+import meow.nyx.quackjs.PlayerTransformResult
 
 private const val FARADAY_SNAPSHOT = "882624d59ccd921aa4cbf528e046ae61e137be47"
 private val faradayJson = Json { prettyPrint = true }
@@ -67,7 +69,8 @@ fun main() {
                 put("oraclePolicy", "2 fresh full-source contexts; first: compiled batch twice, reversed; second: forward")
                 put("limits", "192 MiB native heap, 2 MiB JS stack, 8 MiB thread, 30s per evaluation")
             } else {
-                put("concurrencyPolicy", "first 8 successful distinct primary configs per mode; 4 workers, all 31 cases, 2 passes")
+                put("concurrencyPolicy", "first 8 successful distinct primary configs per mode; 4 workers, all 31 cases, 2 passes; then 62-entry duplicate batch per worker")
+                put("batchPolicy", "two 62-entry forward/reverse batches per mode; per-entry comparisons against unchanged Node goldens")
             }
             put("completed", statuses.size)
             put("passed", statuses.count { it.text("status") == "pass" })
@@ -178,6 +181,16 @@ private fun verifyFaradayMode(source: String, player: JsonObject, cases: List<Ch
             checked++
         }
     }
+    var batchChecked = 0
+    repeat(2) { pass ->
+        val ordered = if (pass == 0) cases + cases.reversed() else cases.reversed() + cases
+        try {
+            checkBatch(program, ordered)
+            batchChecked += ordered.size
+        } catch (failure: Exception) {
+            errors += failedMode("batch-parity", failure)
+        }
+    }
     var concurrency = "not-run-parity-failure"
     if (errors.isEmpty()) {
         concurrency = if (concurrent) {
@@ -190,6 +203,7 @@ private fun verifyFaradayMode(source: String, player: JsonObject, cases: List<Ch
         put("phase", if (errors.isEmpty()) "complete" else "parity")
         put("compile", "pass")
         put("checked", checked)
+        put("batchChecked", batchChecked)
         put("concurrency", concurrency)
         put("errors", JsonArray(errors))
     }
@@ -240,6 +254,19 @@ internal fun verifyFaradayOracle(player: RealPlayer): JsonObject {
 private fun solveFaraday(program: PlayerProgram, c: Challenge): String =
     if (c.kind == "signature") program.decipherSignature(c.input) else program.transformN(c.input)
 
+private fun checkBatch(program: PlayerProgram, cases: List<Challenge>) {
+    val challenges = cases.map {
+        if (it.kind == "signature") PlayerChallenge.Signature(it.input) else PlayerChallenge.N(it.input)
+    }
+    val actual = program.transformBatch(challenges)
+    check(actual.size == cases.size) { "batch result count mismatch" }
+    for (i in cases.indices) {
+        check(actual[i] == PlayerTransformResult.Success(cases[i].output)) {
+            "batch ${cases[i].kind}/${cases[i].name} mismatch: ${actual[i]}"
+        }
+    }
+}
+
 private fun concurrentFaraday(program: PlayerProgram, cases: List<Challenge>) {
     val pool = Executors.newFixedThreadPool(4)
     val start = CyclicBarrier(4)
@@ -252,6 +279,7 @@ private fun concurrentFaraday(program: PlayerProgram, cases: List<Challenge>) {
                     check(solveFaraday(program, c) == c.output) { "concurrent ${c.kind}/${c.name} mismatch" }
                 }
             }
+            checkBatch(program, cases + cases.reversed())
         } }
         pool.invokeAll(tasks, 60, TimeUnit.SECONDS).forEach { it.get() }
     } finally {

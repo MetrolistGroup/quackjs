@@ -20,6 +20,13 @@ class PlayerConcurrencyTest {
                         val actual = if (case.kind == "signature") program.decipherSignature(case.input) else program.transformN(case.input)
                         assertEquals(case.output, actual, "${player.id}/${case.name}")
                     }
+                    for ((player, program) in players) {
+                        val requests = player.cases.map {
+                            if (it.kind == "signature") PlayerChallenge.Signature(it.input) else PlayerChallenge.N(it.input)
+                        }
+                        assertEquals(player.cases.map { PlayerTransformResult.Success(it.output) },
+                            program.transformBatch(requests), "${player.id}/batch")
+                    }
                 }
             }
             pool.invokeAll(tasks, 30, TimeUnit.SECONDS).forEach { it.get() }

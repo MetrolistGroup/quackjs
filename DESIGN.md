@@ -13,6 +13,10 @@ class PlayerProgram {
     val signatureTimestamp: Int?
     fun decipherSignature(input: String): String
     fun transformN(input: String): String
+    fun transformBatch(
+        challenges: List<PlayerChallenge>,
+        checkCancellation: () -> Unit = {},
+    ): List<PlayerTransformResult>
 }
 class UnsupportedPlayerException(message: String) : IllegalArgumentException(message)
 ```
@@ -22,6 +26,21 @@ class UnsupportedPlayerException(message: String) : IllegalArgumentException(mes
 The runtime lives in commonMain and targets Android, JVM, Linux and iOS. It indexes source and follows only the required transform dependencies rather than initializing the whole browser player. Numeric dispatchers are specialized; parsed code and safe constant templates are reused. Mutable containers and execution budgets remain private to each invocation, so compiled programs support concurrent callers without output caching.
 
 `nClass` is a URL wrapper in the original player. QuackJS discovers the n-table update and executes that dependency slice, rather than emulating browser URL handling. Hint-free compilation requires unambiguous executable landmarks; unsupported or ambiguous source fails explicitly. Optimized plans retain live mutation guards and interpreter fallbacks, not fixture/player-ID assumptions.
+
+## Batches
+
+`transformBatch` accepts at most 256 typed decoded challenges and returns one
+success or failure per entry in request order. Its local memo keys include both
+kind and input, and reuse failures as well as successes. Every cache miss uses
+the ordinary single-transform path with independent mutable state and budgets;
+no memo survives the call or is shared between concurrent batches. The entry cap
+also bounds memo/result growth (each successful output retains the existing
+65,536-unit limit). The batch has no separate wall-clock deadline.
+
+An optional cancellation callback executes before every entry outside the
+transform failure handler. Only `UnsupportedPlayerException` from transforms
+becomes a result; cancellation and unexpected failures propagate. This keeps
+coroutines and scheduling out of the stdlib-only runtime.
 
 ## Bounded string replacement
 

@@ -86,6 +86,25 @@ exit nonzero **after** the complete cohort. JVM/OS termination cannot guarantee
 a complete report; check `completed == 200`. Default `jvmTest` neither downloads
 nor executes this corpus.
 
+The batch API adds two 62-entry forward/reverse batches per player/mode, with
+124 extra output comparisons recorded separately as `batchChecked`. Duplicate
+entries are intentional. The eight selected concurrent programs also check one
+62-entry batch per worker after the single-call passes. Earlier recorded reports
+without `batchChecked` predate these checks. Default JVM parity covers batches
+with and without hints on all six offline players; common tests cover per-entry
+failures, memo lifetime/kinds, entry limits and cancellation on memo hits.
+
+The local batch API working tree passed this extended Kotlin cohort on
+2026-10-23: **200/200 in both modes**, each with 24,800 sequential batch output
+comparisons plus 1,984 concurrent batch comparisons, in addition to the existing
+single-call checks. Fresh suites passed **160 JVM, 142 Android-host and 142 Linux**
+tests, with no failures, errors or skips. All 200 source downloads/hash checks and
+the read-only Node oracle passed against unchanged manifest/goldens. The full-source
+QuickJS rerun also passed **200/200**, with 24,800 comparisons in 400 contexts.
+This run used Temurin 21.0.13+9 and Node v26.12.1. Reports are local at
+`/tmp/quackjs-faraday-cache/{jvm,quickjs}-report.json` and
+`/tmp/quackjs-toolchains/`; this is working-tree verification, not a hosted release.
+
 `faraday200OracleVerification` reuses that streaming source/hash/golden loader and
 the existing test-only `RealPlayer` exports and `QuickJsPlayer` limits. For each
 player it initializes **two fresh full-source contexts**: the first compares a
@@ -258,6 +277,17 @@ validation and the [hosted offline run](https://github.com/MetrolistGroup/quackj
 passed, including SDK provisioning, Node oracles and all three platform suites.
 The first setup attempt exposed the retired Android `tools` package; setup now
 requests only `platform-tools` before the pinned platform/build-tools install.
+
+The [complete hosted run](https://github.com/MetrolistGroup/quackjs/actions/runs/39861880159)
+on commit `75b0ffbaf137521293130ad8506f5f08fc067066` passed both jobs on
+2026-10-22. Its downloaded JSON and JUnit artifacts were audited on 2026-10-23:
+all four reports match the pinned manifest hash and exact 200-player cohort,
+with no failed statuses. Both Kotlin modes checked 93 sequential outputs per
+player and concurrent reuse on eight distinct primary configs; QuickJS checked
+124 outputs in two fresh contexts per player. The platform suites passed
+155 JVM, 138 Android-host and 138 Linux tests, with zero failures, errors or skips.
+This verifies the pre-batch runtime in hosted CI as well as the local evidence
+above; it does not extend the pinned corpus or establish live playback.
 Large-corpus local evidence is recorded above; manual hosted runs retain their
 own report artifacts. No branch-protection settings were changed.
 
