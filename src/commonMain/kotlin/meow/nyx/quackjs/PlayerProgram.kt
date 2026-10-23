@@ -23,6 +23,37 @@ public class PlayerProgram private constructor(
 
     public fun transformN(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
 
+    /**
+     * Transform at most 256 decoded challenges, preserving request order and individual failures.
+     * Each distinct (kind, input) runs once, including failures; the memo is discarded on return.
+     * Every distinct transform still owns its mutable state and normal execution budgets.
+     *
+     * [checkCancellation] runs before every entry, including memo hits. Exceptions from it propagate
+     * unchanged; callers can supply their coroutine's ensureActive without a runtime dependency.
+     * A transform itself is synchronous and cannot be interrupted by this callback.
+     * Oversized batches throw [UnsupportedPlayerException] before processing any entries.
+     */
+    public fun transformBatch(
+        challenges: List<PlayerChallenge>,
+        checkCancellation: () -> Unit = {},
+    ): List<PlayerTransformResult> {
+        if (challenges.size > 256) unsupported("Batch challenge count limit exceeded")
+        val memo = mutableMapOf<PlayerChallenge, PlayerTransformResult>()
+        return challenges.map { challenge ->
+            checkCancellation()
+            memo.getOrPut(challenge) {
+                try {
+                    PlayerTransformResult.Success(when (challenge) {
+                        is PlayerChallenge.Signature -> decipherSignature(challenge.input)
+                        is PlayerChallenge.N -> transformN(challenge.input)
+                    })
+                } catch (error: UnsupportedPlayerException) {
+                    PlayerTransformResult.Failure(error.message ?: "Unsupported transform")
+                }
+            }
+        }
+    }
+
     private inline fun run(input: String, transform: (Runtime) -> JsValue): String {
         if (input.length > 16_384) unsupported("Challenge length limit exceeded")
         try {
