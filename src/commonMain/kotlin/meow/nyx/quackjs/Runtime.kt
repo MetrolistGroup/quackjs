@@ -55,6 +55,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun arrayRange(items: List<JsValue>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
     fun string(value: String): JsString { allocate(value.length); return JsString(value) }
     private fun number(value: JsValue): Double {
+        if (value is JsNumber && conversionDepth < 64) return value.value
         // Default function/regex strings cannot parse as numbers; with no own coercion methods this
         // avoids constructing large join strings without skipping any user code.
         if (value is JsArray) {
@@ -539,7 +540,14 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         r.invoke(self, a.getOrElse(0) { Undefined }, items.map { if (it === Hole) Undefined else it })
     }
     val stringConstructor = Native(mapOf(
-        "fromCharCode" to Native { r, _, a -> r.tick(a.size); r.string(a.map { (r.int(it) and 65535).toChar() }.joinToString("")) }
+        "fromCharCode" to Native { r, _, a ->
+            r.tick(a.size)
+            if (a.size == 1) {
+                val code = r.int(a[0]) and 65535
+                r.allocate(1)
+                if (code < latin1Characters.size) latin1Characters[code] else JsString(code.toChar().toString())
+            } else r.string(buildString(a.size) { for (value in a) append((r.int(value) and 65535).toChar()) })
+        }
     )) { r, _, a -> r.string(if (a.isEmpty()) "" else r.stringValue(a[0])) }
     val numberConstructor = Native(mapOf(
         "isNaN" to Native { _, _, a -> JsBoolean((a.firstOrNull() as? JsNumber)?.value?.isNaN() ?: false) },
