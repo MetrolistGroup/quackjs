@@ -31,7 +31,7 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
             }
             if (providers.gradleProperty("oracleOnly").isPresent) {
-                kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt", "**/Lane32Acceptance*.kt")
+                kotlin.exclude("**/PlayerParityTest.kt", "**/PlayerBenchmark.kt", "**/Lane32Acceptance*.kt", "**/Faraday200Benchmark.kt")
             }
         }
     }
@@ -110,6 +110,23 @@ listOf("faraday200Verification", "faraday200OracleVerification").forEach { taskN
         systemProperty("quackjs.faraday.oracle", oracle)
         jvmArgs("-Xms256m", "-Xmx2g")
     }
+}
+
+tasks.register<JavaExec>("faraday200Benchmark") {
+    group = "verification"
+    description = "Opt-in cold, warm, allocation and retained-heap report for the 200 pinned Faraday players"
+    dependsOn("jvmTestClasses")
+    val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
+    mainClass.set("meow.nyx.quackjs.verification.Faraday200BenchmarkKt")
+    providers.gradleProperty("bench.java").orNull?.let { executable(it) }
+    val cache = providers.gradleProperty("faradayCache").orElse(layout.buildDirectory.dir("faraday-200").get().asFile.absolutePath)
+    systemProperty("quackjs.faraday.corpus", layout.projectDirectory.dir("fixtures/faraday-200").asFile.absolutePath)
+    systemProperty("quackjs.faraday.cache", cache.get())
+    listOf("report", "label", "rounds", "players").forEach { name ->
+        providers.gradleProperty("bench.$name").orNull?.let { systemProperty("quackjs.bench.$name", it) }
+    }
+    jvmArgs("-Xms1g", "-Xmx2g")
 }
 
 tasks.register<JavaExec>("lane32AcceptanceBenchmark") {

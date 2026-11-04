@@ -39,6 +39,22 @@ See [oracle methodology and corpus provenance](verification.md).
   harnesses do not measure process startup, concurrent throughput, retained memory,
   energy, live networking, Android hardware or Apple performance.
 
+## Faraday latest-200 cohort
+
+`faraday200Benchmark` measures the pinned players from [verification.md](verification.md),
+reading sources from `-PfaradayCache=<dir>`. Per player, it records cold compile plus
+first pair in a warmed JVM, warm signature and n time per call, allocation per call
+and heap retained by a compiled program. Fresh-JVM first calls cover 24 evenly spaced
+players. Every timed output is compared with the stored goldens outside the timer.
+
+```sh
+./gradlew faraday200Benchmark -PfaradayCache=<dir> -Pbench.report=a.json -Pbench.label=a
+node scripts/faraday-200-compare.mjs a.json b.json
+```
+
+Compare reports only as paired per-player ratios. Run the baseline twice to establish
+the noise floor. `-Pbench.players=N` and `-Pbench.rounds=N` shorten a trial.
+
 ## Recorded JVM results
 
 Core `25e10da`, measured 2026-10-21, after ten selected runtime optimizations.
