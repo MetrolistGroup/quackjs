@@ -21,7 +21,29 @@ public class PlayerProgram private constructor(
         runtime.expression(signature, mapOf("INPUT" to JsString(input)))
     }
 
-    public fun transformN(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
+    // Each lazy publishes one immutable proof; callers never share interpreter state or outputs.
+    private val linearPlans = Array(201) { length -> lazy { deriveLinearN(length) } }
+
+    public fun transformN(input: String): String {
+        if (input.length <= 200) linearPlans[input.length].value.plan?.execute(input)?.let { return it }
+        return transformNInterpreted(input)
+    }
+
+    internal fun transformNInterpreted(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
+    internal fun linearNResult(length: Int): LinearNResult = linearPlans[length].value
+    private fun deriveLinearN(length: Int): LinearNResult {
+        val analysis = LinearNAnalysis(length)
+        val runtime = Runtime(source, parsed, templates, dates, dispatch, globalCount = globalCount, analysis = analysis)
+        return try {
+            analysis.finish(nPlan.execute(runtime, ""), runtime)
+        } catch (error: LinearNFailure) {
+            LinearNResult(null, (error.message ?: "analysis failed").take(160))
+        } catch (error: UnsupportedPlayerException) {
+            LinearNResult(null, (error.message ?: "interpreter limit").take(160))
+        } catch (_: JsThrown) {
+            LinearNResult(null, "JavaScript exception")
+        }
+    }
 
     private inline fun run(input: String, transform: (Runtime) -> JsValue): String {
         if (input.length > 16_384) unsupported("Challenge length limit exceeded")
@@ -159,7 +181,7 @@ private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String
     root.fields["set"] = runtime.function(setter)
     if (mapKey != null) {
         val map = root.fields[mapKey] as? JsObject ?: unsupported("Unsupported n parameter table")
-        map.fields["n"] = JsString(input)
+        map.fields["n"] = runtime.input(input)
     }
     return root
 }

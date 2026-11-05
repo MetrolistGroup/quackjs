@@ -30,6 +30,7 @@ private class BenchPlayer(val id: String, val sha256: String, val hints: PlayerH
     val firstN = ns.single { it.name == "faraday-probe" }
     fun source(): String = Files.readString(cache.resolve("sources/$id.js"))
     val cold = mutableListOf<Double>()
+    val linearBuildMs = mutableListOf<Double>()
     val coldBytes = mutableListOf<Long>()
     val warmSignature = mutableListOf<Double>()
     val warmSignatureBytes = mutableListOf<Long>()
@@ -60,9 +61,15 @@ private fun loadPlayers(): List<BenchPlayer> {
     }
 }
 
-private fun compileAndFirstPair(player: BenchPlayer, source: String): Pair<PlayerProgram, List<String>> {
+private fun compileAndFirstPair(player: BenchPlayer, source: String, planCosts: MutableList<Double>? = null): Pair<PlayerProgram, List<String>> {
     val program = PlayerProgram.compile(source, player.hints)
-    return program to listOf(program.decipherSignature(player.firstSignature.input), program.transformN(player.firstN.input))
+    val signature = program.decipherSignature(player.firstSignature.input)
+    if (planCosts != null) {
+        val start = System.nanoTime()
+        program.linearNResult(player.firstN.input.length)
+        planCosts += (System.nanoTime() - start) / 1e6
+    }
+    return program to listOf(signature, program.transformN(player.firstN.input))
 }
 
 private fun checkFirstPair(player: BenchPlayer, results: List<String>) {
@@ -73,7 +80,7 @@ private fun sampleCold(player: BenchPlayer): PlayerProgram {
     val source = player.source()
     val bytes = threads.currentThreadAllocatedBytes
     val start = System.nanoTime()
-    val (program, results) = compileAndFirstPair(player, source)
+    val (program, results) = compileAndFirstPair(player, source, player.linearBuildMs)
     val elapsed = System.nanoTime() - start
     player.coldBytes += threads.currentThreadAllocatedBytes - bytes
     player.cold += elapsed / 1e6
@@ -198,6 +205,7 @@ private fun buildPlayerJson(p: BenchPlayer, firstCall: List<Double>?): JsonObjec
     put("id", p.id)
     p.failure?.let { put("failure", it) }
     putJsonArray("coldMs") { p.cold.forEach { add(it) } }
+    putJsonArray("linearBuildMs") { p.linearBuildMs.forEach { add(it) } }
     putJsonArray("coldBytes") { p.coldBytes.forEach { add(it) } }
     putJsonArray("warmSignatureNs") { p.warmSignature.forEach { add(it) } }
     putJsonArray("warmSignatureBytes") { p.warmSignatureBytes.forEach { add(it) } }

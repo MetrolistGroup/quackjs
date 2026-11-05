@@ -142,3 +142,16 @@ tasks.register<JavaExec>("lane32AcceptanceBenchmark") {
         check(!providers.gradleProperty("oracleOnly").isPresent) { "lane32AcceptanceBenchmark requires the core, not -PoracleOnly" }
     }
 }
+
+// Opt-in source-backed differential checks, separate from the fixture-only default suite.
+tasks.register<JavaExec>("linearNDifferential") {
+    group = "verification"
+    dependsOn("jvmTestClasses")
+    val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
+    mainClass.set("meow.nyx.quackjs.verification.LinearNDifferentialKt")
+    systemProperty("quackjs.linear.cache", providers.gradleProperty("faradayCache").orElse("build/faraday-200").get())
+    systemProperty("quackjs.linear.report", providers.gradleProperty("linearReport").orElse(".lane-tmp/linear-n-differential.json").get())
+    providers.gradleProperty("linearPlayers").orNull?.let { systemProperty("quackjs.linear.players", it) }
+    jvmArgs("-Xmx2g")
+}

@@ -23,7 +23,7 @@ internal class Env(val parent: Env? = null, private val names: Map<String, Int>?
     operator fun set(name: String, value: JsValue) { val slot = names?.get(name); if (slot == null) { values[name] = value; revision++ } else slots[slot] = value }
 }
 
-internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, JsValue> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0) {
+internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, JsValue> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0, private val analysis: LinearNAnalysis? = null) {
     val definitions = mutableMapOf<String, Expr>()
     val constantDates = mutableMapOf<String, Double>()
     val specializedBodies: MutableMap<DispatchKey, Block>? = if (recordDispatch) mutableMapOf() else null
@@ -37,6 +37,14 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     var challenge: String? = null
     private var handlers = 0
     private var expressionDepth = 0
+    internal val chargedSteps: Int get() = steps
+    internal val handlingException: Boolean get() = handlers > 0
+    internal val chargedAllocation: Int get() = allocated
+    internal fun input(value: String): JsValue = analysis?.input() ?: JsString(value)
+    internal fun plainArrayNumberContext(): Boolean = conversionDepth == 0 && calls <= 61
+    internal fun symbolicContext() {
+        if (conversionDepth != 0) linearReject("symbolic coercion context")
+    }
     fun tick(cost: Int = 1) { if (cost < 0 || cost > 2_000_000 - steps) unsupported("Execution step limit exceeded"); steps += cost }
     fun allocate(size: Int) {
         if (size < 0 || size > 65_536) unsupported("Value size limit exceeded")
@@ -49,7 +57,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     private fun number(value: JsValue): Double {
         // Default function/regex strings cannot parse as numbers; with no own coercion methods this
         // avoids constructing large join strings without skipping any user code.
-        if (value is JsArray && arrayAlwaysCoercesToNaN(value)) return Double.NaN
+        if (value is JsArray) {
+            if (arrayAlwaysCoercesToNaN(value)) return Double.NaN
+            if (analysis?.primitiveArrayNaN(this, value) == true) return Double.NaN
+        }
         val input = primitive(value, PrimitiveHint.NUMBER)
         if (input is JsString) tick(input.value.length)
         return meow.nyx.quackjs.number(input)
@@ -99,14 +110,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 is JsFunction, is Native, is RegexValue -> hasCallable = true
                 is JsArray -> { allocate(1); pending.addLast(item) }
                 is JsObject -> if (item.fields.containsKey("toString") || item.fields.containsKey("valueOf")) return false
-                is JsDate -> return false
+                is JsDate, is LinearNumber -> return false
                 is JsNumber -> if (item.value.isFinite() && (item.value != floor(item.value) || abs(item.value) > 9007199254740991.0)) return false
                 else -> Unit
             }
         }
         return hasCallable
     }
-    private fun joinArray(array: JsArray, separatorValue: JsValue = Undefined): JsString {
+    private fun joinArray(array: JsArray, separatorValue: JsValue = Undefined): JsValue {
+        analysis?.join(this, array, separatorValue)?.let { return it }
         val length = array.values.size
         val separator = if (separatorValue === Undefined) "," else stringValue(separatorValue)
         if (!joiningArrays.add(array)) return JsString("")
@@ -152,6 +164,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         return -1
     }
     private fun equal(a: JsValue, b: JsValue, strict: Boolean): Boolean {
+        if (analysis != null && (a is LinearValue || b is LinearValue)) linearReject("input-dependent comparison")
         if (!strict) {
             if (isRuntimeObject(a) && !isRuntimeObject(b) && b !== JsNull && b !== Undefined) return equal(primitive(a), b, false)
             if (isRuntimeObject(b) && !isRuntimeObject(a) && a !== JsNull && a !== Undefined) return equal(a, primitive(b), false)
@@ -197,11 +210,12 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             is Unary -> when (expr.op) {
                 "typeof" -> {
                     val value = if (expr.expr is Id && env.owner(expr.expr.name) == null && !source.hasDefinition(expr.expr.name) && builtin(expr.expr.name) == null) Undefined else eval(expr.expr, env)
-                    JsString(when (value) { Undefined -> "undefined"; is JsString -> "string"; is JsNumber -> "number"; is JsBoolean -> "boolean"; is JsFunction, is Native -> "function"; else -> "object" })
+                    JsString(when (value) { Undefined -> "undefined"; is JsString, is LinearString -> "string"; is JsNumber, is LinearNumber -> "number"; is JsBoolean -> "boolean"; is JsFunction, is Native -> "function"; else -> "object" })
                 }
                 "delete" -> {
                     val target = expr.expr as? Member ?: unsupported("Unsupported delete target")
                     val obj = eval(target.target, env); val rawKey = eval(target.key, env)
+                    if (analysis != null && rawKey is LinearValue) linearReject("input-dependent delete position")
                     if (obj !is JsObject && obj !is JsArray) unsupported("Unsupported delete target")
                     val key = stringValue(rawKey)
                     tick(key.length)
@@ -243,7 +257,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                         return invoke(self, receiver, arguments(expr.args, env, 1))
                     }
                     val method = property(self, key)
-                    if (method === Undefined && key is JsString && (self is JsString || self is JsArray || self is Native) && identifierProperty(key.value) && key.value !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '${key.value}'")
+                    if (method === Undefined && key is JsString && (self is JsString || self is JsArray || self is Native || analysis != null && self is LinearString) && identifierProperty(key.value) && key.value !in setOf("NaN", "Infinity", "undefined")) unsupported("Unsupported built-in method '${key.value}'")
                     method
                 } else eval(expr.fn, env)
                 val args = arguments(expr.args, env)
@@ -295,12 +309,30 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             return when (fn) {
                 is Native -> {
                     if (construct && !fn.constructible || !construct && !fn.callable) unsupported("Unsupported built-in constructor/call")
+                    if (analysis != null) {
+                        if (self is LinearValue || args.any { it is LinearValue }) symbolicContext()
+                        when (fn) {
+                            stringMethods["split"] -> if (self is LinearString) return analysis.split(this, self, args)
+                            arrayMethods["indexOf"] -> {
+                                if (args.firstOrNull() is LinearValue) return analysis.indexOf(this, self, args)
+                                if (self is JsArray && self.values.any { it is LinearValue }) linearReject("search of symbolic array")
+                            }
+                            stringMethods["toString"], stringMethods["valueOf"] -> if (self is LinearString) return self
+                        }
+                        val movesValues = fn === arrayMethods["push"] || fn === arrayMethods["unshift"] ||
+                            fn === arrayMethods["splice"] && args.take(2).none { it is LinearValue } ||
+                            fn === arrayMethods["forEach"] && args.firstOrNull() !is LinearValue
+                        if ((self is LinearValue || args.any { it is LinearValue }) &&
+                            !movesValues && fn !== callMethod && fn !== applyMethod) {
+                            linearReject("unsupported symbolic native ${fn.functionName}")
+                        }
+                    }
                     fn.invoke(this, self, args)
                 }
                 is JsFunction -> {
                     val env = functionEnv(fn, self, args, reuse)
                     // Reserve eleven complex-expression levels for the XOR-key shape; otherwise retain depth checks.
-                    if (expressionDepth <= 245 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
+                    if (analysis == null && expressionDepth <= 245 && fn.code.hotCharacterPlan?.execute(this, env) == true) return Undefined
                     val key = if (args.size >= 2 && args[0] is JsNumber && args[1] is JsNumber) DispatchKey(fn.code, (args[0] as JsNumber).value, (args[1] as JsNumber).value) else null
                     val body = if (key == null) fn.code.body else dispatch[key] ?: specializedBodies?.get(key) ?: if (specializedBodies != null && specializedBodies.size < 256) specialize(fn.code, key.first, key.second, this).also { specializedBodies[key] = it } else fn.code.body
                     when (val flow = exec(body, env)) {
@@ -394,6 +426,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         is Member -> {
             val obj = eval(expr.target, env); val rawKey = eval(expr.key, env)
+            if (analysis != null && rawKey is LinearValue) linearReject("input-dependent write position")
             if (obj === JsNull || obj === Undefined) {
                 if (!read) value(Undefined)
                 throw JsThrown("Cannot set property on null/undefined")
@@ -437,6 +470,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     private fun numericIndex(key: JsValue): Int? = if (key is JsNumber && key.value >= 0 && key.value < 65_536 && key.value == key.value.toInt().toDouble()) key.value.toInt() else null
     internal fun property(obj: JsValue, key: JsValue): JsValue {
+        if (analysis != null && key is LinearValue) {
+            symbolicContext()
+            return analysis.lookup(this, obj, key)
+        }
         if (obj === JsNull || obj === Undefined) throw JsThrown("Cannot read property on null/undefined")
         val i = numericIndex(key)
         if (i != null) when (obj) {
@@ -476,6 +513,12 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             index(key)?.let { return if (it < obj.value.length) JsString(obj.value[it].toString()) else Undefined }
             return stringMethods[key] ?: Undefined
         }
+        if (obj is LinearString) {
+            if (key == "length") return JsNumber(obj.refs.size.toDouble())
+            index(key)?.let { return if (it < obj.refs.size) LinearString(intArrayOf(obj.refs[it])) else Undefined }
+            return stringMethods[key] ?: Undefined
+        }
+        if (obj is LinearNumber) linearReject("symbolic numeric property")
         if (key == "toString" && (obj is JsNumber || obj is JsBoolean)) return Native(functionName = "toString") { r, self, a ->
             if (obj is JsBoolean && self !is JsBoolean || obj !is JsBoolean && self !is JsNumber) throw JsThrown("Invalid primitive method receiver")
             if (a.isNotEmpty() && r.number(a[0]) != 10.0) unsupported("Unsupported number radix")
@@ -673,8 +716,15 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         else -> Undefined
     }
     }
-    private fun binary(op: String, left: JsValue, right: JsValue): JsValue = when (op) {
-        "+" -> { if (left is JsDate || right is JsDate) unsupported("Default date coercion is unsupported"); val a = primitive(left); val b = primitive(right); if (a is JsString || b is JsString) { val x = text(a); val y = text(b); if (handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else JsNumber(number(a) + number(b)) }
+    private fun binary(op: String, left: JsValue, right: JsValue): JsValue {
+        if (analysis != null && (left is LinearValue || right is LinearValue)) {
+            symbolicContext()
+            return analysis.binary(this, op, left, right)
+        }
+        return rawBinary(op, left, right)
+    }
+    private fun rawBinary(op: String, left: JsValue, right: JsValue): JsValue = when (op) {
+        "+" -> { if (left is JsDate || right is JsDate) unsupported("Default date coercion is unsupported"); val a = primitive(left); val b = primitive(right); if (a is JsString || b is JsString) { val x = text(a); val y = text(b); if (handlers > 0) analysis?.handlerAddition(x.length, JsString(y)); if (analysis == null && handlers > 0 && challenge != null && y == challenge && x.isNotEmpty()) unsupported("Transform entered an exception fallback"); if (x.length.toLong() + y.length > 65_536) unsupported("String size limit exceeded"); string(x + y) } else JsNumber(number(a) + number(b)) }
         "-" -> JsNumber(number(left) - number(right)); "*" -> JsNumber(number(left) * number(right)); "/" -> JsNumber(number(left) / number(right)); "%" -> JsNumber(number(left) % number(right)); "**" -> JsNumber(jsPow(number(left), number(right)))
         "^" -> JsNumber((int(left) xor int(right)).toDouble()); "&" -> JsNumber((int(left) and int(right)).toDouble()); "|" -> JsNumber((int(left) or int(right)).toDouble())
         "<<" -> JsNumber((int(left) shl (int(right) and 31)).toDouble()); ">>" -> JsNumber((int(left) shr (int(right) and 31)).toDouble()); ">>>" -> JsNumber((int(left).toUInt() shr (int(right) and 31)).toDouble())
@@ -759,8 +809,8 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
 
 private fun identifierProperty(name: String): Boolean = SourceIndex.identifier(name)
 
-internal fun truth(value: JsValue): Boolean = when (value) { is JsBoolean -> value.value; is JsNumber -> value.value != 0.0 && !value.value.isNaN(); is JsString -> value.value.isNotEmpty(); JsNull, Undefined, Hole -> false; else -> true }
-internal fun primitive(value: JsValue): JsValue = when (value) { is JsDate -> JsNumber(value.time); is JsArray -> unsupported("Implicit array coercion is unsupported"); is JsObject -> unsupported("Implicit object coercion is unsupported"); else -> value }
+internal fun truth(value: JsValue): Boolean = when (value) { is JsBoolean -> value.value; is JsNumber -> value.value != 0.0 && !value.value.isNaN(); is JsString -> value.value.isNotEmpty(); is LinearString -> value.refs.isNotEmpty(); is LinearNumber -> linearReject("input-dependent control"); JsNull, Undefined, Hole -> false; else -> true }
+internal fun primitive(value: JsValue): JsValue = when (value) { is JsDate -> JsNumber(value.time); is JsArray -> unsupported("Implicit array coercion is unsupported"); is JsObject -> unsupported("Implicit object coercion is unsupported"); is LinearValue -> linearReject("symbolic coercion"); else -> value }
 internal fun number(value: JsValue): Double = when (val v = primitive(value)) { JsNull -> 0.0; Undefined, Hole -> Double.NaN; is JsNumber -> v.value; is JsBoolean -> if (v.value) 1.0 else 0.0; is JsString -> numericString(v.value); else -> Double.NaN }
 private val decimalNumber = Regex("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 private fun numericString(value: String): Double {
