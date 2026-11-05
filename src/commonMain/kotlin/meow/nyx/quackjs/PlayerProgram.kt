@@ -21,7 +21,29 @@ public class PlayerProgram private constructor(
         runtime.expression(signature, mapOf("INPUT" to JsString(input)))
     }
 
-    public fun transformN(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
+    // Each lazy publishes one immutable proof; callers never share interpreter state or outputs.
+    private val linearPlans = Array(201) { length -> lazy { deriveLinearN(length) } }
+
+    public fun transformN(input: String): String {
+        if (input.length <= 200) linearPlans[input.length].value.plan?.execute(input)?.let { return it }
+        return transformNInterpreted(input)
+    }
+
+    internal fun transformNInterpreted(input: String): String = run(input) { runtime -> nPlan.execute(runtime, input) }
+    internal fun linearNResult(length: Int): LinearNResult = linearPlans[length].value
+    private fun deriveLinearN(length: Int): LinearNResult {
+        val analysis = LinearNAnalysis(length)
+        val runtime = Runtime(source, parsed, templates, dates, dispatch, globalCount = globalCount, analysis = analysis)
+        return try {
+            analysis.finish(nPlan.execute(runtime, ""), runtime)
+        } catch (error: LinearNFailure) {
+            LinearNResult(null, (error.message ?: "analysis failed").take(160))
+        } catch (error: UnsupportedPlayerException) {
+            LinearNResult(null, (error.message ?: "interpreter limit").take(160))
+        } catch (_: JsThrown) {
+            LinearNResult(null, "JavaScript exception")
+        }
+    }
 
     private inline fun run(input: String, transform: (Runtime) -> JsValue): String {
         if (input.length > 16_384) unsupported("Challenge length limit exceeded")
@@ -68,6 +90,7 @@ public class PlayerProgram private constructor(
                     if (node is Id && node.free) node.globalSlot = globals[node.name] ?: -1
                     syntaxChildren(node) { pending.add(it) }
                 }
+                source.releaseCompileState()
                 return PlayerProgram(source, signature, plan, parsed, templates, runtime.constantDates.toMap(), dispatch, globals.size, hints?.signatureTimestamp ?: source.signatureTimestamp)
             } catch (error: JsThrown) {
                 unsupported("Player initialization failed: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
@@ -93,18 +116,20 @@ public class PlayerProgram private constructor(
             }
             // A landmark inside a comment, string or template is never executable code.
             val wanted = candidates.flatMap { it.locations }.toSet()
+            val byOffset = wanted.groupBy { it.first }
             val actual = mutableSetOf<Pair<Int, String>>()
             val lexer = Lexer(source)
-            var previous: String? = null
+            var previous = true
             var count = 0
             val end = wanted.maxOfOrNull { it.first } ?: -1
             while (end >= 0) {
-                val token = lexer.next(previous)
-                if (token.kind == -1 || token.offset > end) break
+                lexer.scan(previous)
+                if (lexer.kind == -1 || lexer.offset > end) break
                 if (++count > 2_000_000) unsupported("Source token limit exceeded")
-                val location = token.offset to token.text
-                if (token.kind == 0 && location in wanted) actual.add(location)
-                previous = token.context
+                if (lexer.kind == 0) for (location in byOffset[lexer.offset].orEmpty()) {
+                    if (lexer.end - lexer.offset == location.second.length && source.regionMatches(lexer.offset, location.second, 0, location.second.length)) actual.add(location)
+                }
+                previous = lexer.regexAfter
             }
             val valid = candidates.filter { actual.containsAll(it.locations) }.map { it.signature to it.nClass }.toSet()
             if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
@@ -156,7 +181,7 @@ private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String
     root.fields["set"] = runtime.function(setter)
     if (mapKey != null) {
         val map = root.fields[mapKey] as? JsObject ?: unsupported("Unsupported n parameter table")
-        map.fields["n"] = JsString(input)
+        map.fields["n"] = runtime.input(input)
     }
     return root
 }

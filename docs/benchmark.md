@@ -39,6 +39,43 @@ See [oracle methodology and corpus provenance](verification.md).
   harnesses do not measure process startup, concurrent throughput, retained memory,
   energy, live networking, Android hardware or Apple performance.
 
+## Faraday latest-200 cohort
+
+`faraday200Benchmark` measures the pinned players from [verification.md](verification.md),
+reading sources from `-PfaradayCache=<dir>`. Per player, it records cold compile plus
+first pair in a warmed JVM, warm signature and n time per call, allocation per call
+and heap retained by a compiled program. Fresh-JVM first calls cover about 25 evenly spaced
+players. Every timed output is compared with the stored goldens outside the timer.
+
+```sh
+./gradlew faraday200Benchmark -PfaradayCache=<dir> -Pbench.report=a.json -Pbench.label=a
+node scripts/faraday-200-compare.mjs a.json b.json
+```
+
+Compare reports only as paired per-player ratios. Run the baseline twice to establish
+the noise floor. `-Pbench.players=N` and `-Pbench.rounds=N` shorten a trial.
+
+### 2026-11-05 results
+
+Token-free scanning, dropped compile indexes, linear n plans and the `fromCharCode`
+fast path, against unchanged `main` at `75b0ffb`. Temurin 21 pinned to the V-Cache CCD.
+Ratios are geometric means of paired per-player ratios; above 1 is better. Two baseline
+runs set the noise floor, as per-player p5-p95: cold 0.975-1.023, first call 0.952-1.052,
+warm n 0.983-1.020, warm signature 0.989-1.016.
+
+| Metric | Baseline median | New median | Ratio |
+| --- | ---: | ---: | ---: |
+| Cold compile plus first pair | 115.2 ms | 73 ms | 1.57 |
+| Fresh-JVM first call (25 players) | 460 ms | 310 ms | 1.49 |
+| Warm n call | 195 us | 2.5 us | 64.6 |
+| Warm signature call | 4.14 us | 4.07 us | 1.04 |
+| Warm n allocation | 237 KB | 4 KB | about 49 |
+| Retained program heap, one plan built | 9.08 MB | 4.4 MB | 2.07 |
+
+Plans cover 40,197 of 40,200 player-length cells on the cohort for lengths 0-200;
+the rest and longer inputs use the interpreter. Retained heap with many lengths
+populated was not measured. These are JVM numbers, not Android or Native numbers.
+
 ## Recorded JVM results
 
 Core `25e10da`, measured 2026-10-21, after ten selected runtime optimizations.

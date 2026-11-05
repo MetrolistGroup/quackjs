@@ -20,7 +20,36 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
         }
     }
 
+    var kind: Int = -1
+        private set
+    var offset: Int = p
+        private set
+    var end: Int = p
+        private set
+    var tag: Int = -1
+        private set
+    private var cachedText: String? = null
+    val text: String get() = cachedText ?: when (kind) {
+        -1 -> "<eof>"
+        1 -> Lexer(source, offset + 1).quoted(source[offset], true)!!
+        else -> source.substring(offset, end)
+    }.also { cachedText = it }
+    val regexAfter: Boolean get() = kind == 0 && tag in regexTags
+    fun materialize(): Token = Token(text, kind, offset)
     fun next(previous: String? = null): Token {
+        scan(previous == null || previous in regexPrefix)
+        return materialize()
+    }
+    private fun finish(start: Int, tokenKind: Int) {
+        offset = start
+        end = p
+        kind = tokenKind
+        tag = if (kind == 0) ScanTags.code(source, start, p) else -kind - 1
+        cachedText = null
+    }
+
+    /** Advance without allocating token text. All literal validation still runs. */
+    fun scan(regexAllowed: Boolean = true) {
         while (p < source.length) {
             if (jsWhitespace(source[p])) { p++; continue }
             if (source.startsWith("//", p)) {
@@ -35,7 +64,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
             break
         }
         val start = p
-        if (p == source.length) return Token("<eof>", -1, p)
+        if (p == source.length) return finish(p, -1)
         val c = source[p++]
         if (c == '`') {
             if (++templateDepth > 64) unsupported("Template nesting limit exceeded")
@@ -43,17 +72,17 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
                 while (p < source.length) {
                     val ch = source[p++]
                     if (ch == '\\') { if (p < source.length) p++; continue }
-                    if (ch == '`') return Token(source.substring(start, p), 4, start)
+                    if (ch == '`') return finish(start, 4)
                     if (ch == '$' && p < source.length && source[p] == '{') {
                         p++
                         var braces = 1
-                        var prev: String? = null
+                        var prev = true
                         while (braces > 0) {
-                            val token = next(prev)
-                            if (token.kind == -1) unsupported("Unclosed template interpolation")
-                            if (token.kind == 0 && token.text == "{") braces++
-                            if (token.kind == 0 && token.text == "}") braces--
-                            prev = token.context
+                            scan(prev)
+                            if (kind == -1) unsupported("Unclosed template interpolation")
+                            if (kind == 0 && tag == '{'.code) braces++
+                            if (kind == 0 && tag == '}'.code) braces--
+                            prev = regexAfter
                         }
                     }
                 }
@@ -61,44 +90,18 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
             } finally { templateDepth-- }
         }
         if (c == '\'' || c == '"') {
-            val result = StringBuilder()
-            while (p < source.length) {
-                var ch = source[p++]
-                if (ch == c) return Token(result.toString(), 1, start)
-                if (ch == '\\') {
-                    if (p == source.length) unsupported("Unclosed string escape")
-                    ch = source[p++]
-                    when (ch) {
-                        'n' -> result.append('\n'); 'r' -> result.append('\r'); 't' -> result.append('\t')
-                        'b' -> result.append('\b'); 'f' -> result.append('\u000c'); 'v' -> result.append('\u000b')
-                        '\n' -> Unit
-                        '\r' -> if (p < source.length && source[p] == '\n') p++
-                        'x', 'u' -> {
-                            val length = if (ch == 'x') 2 else 4
-                            if (p + length > source.length) unsupported("Invalid string escape")
-                            val n = source.substring(p, p + length).toIntOrNull(16) ?: unsupported("Invalid string escape")
-                            result.append(n.toChar()); p += length
-                        }
-                        '0' -> { if (p < source.length && source[p].isDigit()) unsupported("Legacy octal string escape"); result.append('\u0000') }
-                        in '1'..'7' -> unsupported("Legacy octal string escape")
-                        else -> result.append(ch)
-                    }
-                } else {
-                    if (ch == '\n' || ch == '\r') unsupported("Unclosed string")
-                    result.append(ch)
-                }
-            }
-            unsupported("Unclosed string")
+            quoted(c, false)
+            return finish(start, 1)
         }
         if (c.isLetter() || c == '_' || c == '$') {
             while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '_' || source[p] == '$')) p++
-            return Token(source.substring(start, p), 0, start)
+            return finish(start, 0)
         }
         if (c.isDigit() || c == '.' && p < source.length && source[p].isDigit()) {
             while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '.' || (source[p] == '+' || source[p] == '-') && source[p - 1].lowercaseChar() == 'e')) p++
-            return Token(source.substring(start, p), 2, start)
+            return finish(start, 2)
         }
-        if (c == '/' && (previous == null || previous in regexPrefix)) {
+        if (c == '/' && regexAllowed) {
             var bracket = false
             while (p < source.length) {
                 val ch = source[p++]
@@ -107,19 +110,51 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
                 if (ch == ']') bracket = false
                 if (ch == '/' && !bracket) {
                     while (p < source.length && source[p].isLetter()) p++
-                    return Token(source.substring(start, p), 3, start)
+                    return finish(start, 3)
                 }
                 if (ch == '\n' || ch == '\r') unsupported("Unclosed regex")
             }
             unsupported("Unclosed regex")
         }
         for (op in operators[c].orEmpty()) if (source.startsWith(op, start)) {
-            p = start + op.length; return Token(op, 0, start)
+            p = start + op.length; return finish(start, 0)
         }
-        return Token(c.toString(), 0, start)
+        return finish(start, 0)
+    }
+
+    private fun quoted(c: Char, decode: Boolean): String? {
+        val result = if (decode) StringBuilder() else null
+        while (p < source.length) {
+            var ch = source[p++]
+            if (ch == c) return result?.toString()
+            if (ch == '\\') {
+                if (p == source.length) unsupported("Unclosed string escape")
+                ch = source[p++]
+                when (ch) {
+                    'n' -> result?.append('\n'); 'r' -> result?.append('\r'); 't' -> result?.append('\t')
+                    'b' -> result?.append('\b'); 'f' -> result?.append('\u000c'); 'v' -> result?.append('\u000b')
+                    '\n' -> Unit
+                    '\r' -> if (p < source.length && source[p] == '\n') p++
+                    'x', 'u' -> {
+                        val length = if (ch == 'x') 2 else 4
+                        if (p + length > source.length) unsupported("Invalid string escape")
+                        val n = source.substring(p, p + length).toIntOrNull(16) ?: unsupported("Invalid string escape")
+                        result?.append(n.toChar()); p += length
+                    }
+                    '0' -> { if (p < source.length && source[p].isDigit()) unsupported("Legacy octal string escape"); result?.append('\u0000') }
+                    in '1'..'7' -> unsupported("Legacy octal string escape")
+                    else -> result?.append(ch)
+                }
+            } else {
+                if (ch == '\n' || ch == '\r') unsupported("Unclosed string")
+                result?.append(ch)
+            }
+        }
+        unsupported("Unclosed string")
     }
 
     companion object {
+        private val regexTags = intArrayOf(ScanTags.EQUAL, ScanTags.LPAREN, ScanTags.LBRACKET, ScanTags.COMMA, ScanTags.COLON, ScanTags.SEMI, ScanTags.RETURN, ScanTags.CASE, ScanTags.ELSE, ScanTags.BANG, ScanTags.AND, ScanTags.OR, ScanTags.QUESTION, ScanTags.LBRACE, ScanTags.RBRACE, ScanTags.PLUS, ScanTags.MINUS, ScanTags.STAR, ScanTags.CARET, ScanTags.AMP, ScanTags.PIPE, ScanTags.THROW)
         private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
         private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...").groupBy { it[0] }
     }
