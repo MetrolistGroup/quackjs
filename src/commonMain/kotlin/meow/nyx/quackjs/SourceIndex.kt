@@ -28,12 +28,8 @@ internal class SourceIndex(val source: String, className: String) {
     private data class CallEffects(val receiver: String?, val predicate: String?, val reversal: String?, val arguments: References)
     private data class FunctionScope(val depth: Int, val parameters: Int, val name: String?)
     private enum class DefinitionKind { PRIMITIVE, ARRAY, UNKNOWN }
-    private val assignments: List<Assignment>
-    private val rootBraces: Int
-    private val rootParens: Int
-    private val names: Map<String, List<Assignment>>
-    private val mutatedObjects: Set<String>
-    private val writeCounts: Map<String, Int>
+    private var assignments: List<Assignment>
+    private val definitions: Map<String, Int>
     private val timestamps: Set<Int>
     val signatureTimestamp: Int? get() = if (timestamps.size <= 1) timestamps.singleOrNull() else unsupported("Conflicting signature timestamps")
 
@@ -139,16 +135,16 @@ internal class SourceIndex(val source: String, className: String) {
         val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$className'")
         val classAssignments = classes.filter { it.braces == depth }
         if (classAssignments.size != 1) unsupported("Ambiguous n class '$className'")
-        rootBraces = classAssignments.single().braces
-        rootParens = classAssignments.single().parens
+        val rootBraces = classAssignments.single().braces
+        val rootParens = classAssignments.single().parens
         assignments = found.filter { it.braces == rootBraces && it.parens == rootParens }
-        names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
+        val names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
         val writes = found.filter { it.braces == rootBraces }
-        writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
+        val writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
         val kinds = mutableMapOf<String, DefinitionKind>()
         var nativeSplit = true
-        fun canMutate(name: String): Boolean = definitionKind(name, kinds, scans, nativeSplit) != DefinitionKind.PRIMITIVE
-        fun arrayLength(name: String): Boolean = definitionKind(name, kinds, scans, nativeSplit) == DefinitionKind.ARRAY
+        fun canMutate(name: String): Boolean = definitionKind(name, kinds, scans, nativeSplit, names, writeCounts) != DefinitionKind.PRIMITIVE
+        fun arrayLength(name: String): Boolean = definitionKind(name, kinds, scans, nativeSplit, names, writeCounts) == DefinitionKind.ARRAY
         val aliases = mutableMapOf<String, MutableSet<String>>()
         val contents = mutableMapOf<String, MutableSet<String>>()
         val lengthContents = mutableMapOf<String, MutableSet<String>>()
@@ -257,7 +253,14 @@ internal class SourceIndex(val source: String, className: String) {
             blocked.addAll(changed)
             affected = mutations(blocked)
         }
-        mutatedObjects = affected + updated
+        val mutatedObjects = affected + updated
+        definitions = names.mapValues { (name, entries) ->
+            when {
+                entries.size != 1 -> AMBIGUOUS
+                name in mutatedObjects || writeCounts[name] != 1 -> MUTATED
+                else -> entries.single().offset
+            }
+        }
         timestamps = stamps
     }
 
@@ -265,13 +268,13 @@ internal class SourceIndex(val source: String, className: String) {
         try { Parser(tokens + Token("<eof>", -1), source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
 
     /** Prove initializer value kinds without executing unrelated player code. */
-    private fun definitionKind(name: String, known: MutableMap<String, DefinitionKind>, scans: ScanBudget, nativeSplit: Boolean, resolving: MutableSet<String> = mutableSetOf()): DefinitionKind {
+    private fun definitionKind(name: String, known: MutableMap<String, DefinitionKind>, scans: ScanBudget, nativeSplit: Boolean, names: Map<String, List<Assignment>>, writeCounts: Map<String, Int>, resolving: MutableSet<String> = mutableSetOf()): DefinitionKind {
         known[name]?.let { return it }
         if (resolving.size >= 64 || !resolving.add(name)) return DefinitionKind.UNKNOWN
         try {
             fun kind(expr: Expr): DefinitionKind = when (expr) {
                 is Lit -> if (expr.value === JsNull || expr.value is JsString || expr.value is JsNumber || expr.value is JsBoolean) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
-                is Id -> definitionKind(expr.name, known, scans, nativeSplit, resolving)
+                is Id -> definitionKind(expr.name, known, scans, nativeSplit, names, writeCounts, resolving)
                 is ArrayExpr -> DefinitionKind.ARRAY
                 is Unary -> if (expr.op in setOf("!", "~", "+", "-", "typeof", "void", "delete")) DefinitionKind.PRIMITIVE else DefinitionKind.UNKNOWN
                 is Binary -> when (expr.op) {
@@ -399,13 +402,18 @@ internal class SourceIndex(val source: String, className: String) {
         return Reference(base, projected).takeIf { lexer.kind == -1 || lexer.tag in expressionEnds }
     }
 
-    fun hasDefinition(name: String): Boolean = names.containsKey(name)
+    /** Called before publication, after class and method discovery has finished. */
+    fun releaseCompileState() {
+        assignments = emptyList()
+    }
+
+    fun hasDefinition(name: String): Boolean = definitions.containsKey(name)
 
     fun definition(name: String): Expr {
-        val entries = names[name] ?: unsupported("Missing dependency '$name'")
-        if (entries.size != 1) unsupported("Ambiguous dependency '$name'")
-        if (name in mutatedObjects || writeCounts[name] != 1) unsupported("Externally mutated dependency '$name'")
-        return parseAt(entries.single().offset)
+        val offset = definitions[name] ?: unsupported("Missing dependency '$name'")
+        if (offset == AMBIGUOUS) unsupported("Ambiguous dependency '$name'")
+        if (offset == MUTATED) unsupported("Externally mutated dependency '$name'")
+        return parseAt(offset)
     }
 
     fun parseAt(offset: Int): Expr = Parser(slice(offset), source).completeExpression()
@@ -453,6 +461,8 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     companion object {
+        private const val AMBIGUOUS = -1
+        private const val MUTATED = -2
         // Track String mutations too: an overridden split need not return an array.
         private val readOnlyPredicates = mapOf("Array" to setOf("isArray"), "Number" to setOf("isNaN", "isFinite"), "String" to emptySet())
         fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }

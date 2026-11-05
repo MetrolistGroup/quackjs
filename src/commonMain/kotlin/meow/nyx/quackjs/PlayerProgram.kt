@@ -68,6 +68,7 @@ public class PlayerProgram private constructor(
                     if (node is Id && node.free) node.globalSlot = globals[node.name] ?: -1
                     syntaxChildren(node) { pending.add(it) }
                 }
+                source.releaseCompileState()
                 return PlayerProgram(source, signature, plan, parsed, templates, runtime.constantDates.toMap(), dispatch, globals.size, hints?.signatureTimestamp ?: source.signatureTimestamp)
             } catch (error: JsThrown) {
                 unsupported("Player initialization failed: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
