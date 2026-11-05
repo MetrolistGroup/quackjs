@@ -19,10 +19,10 @@ import meow.nyx.quackjs.PlayerProgram
 fun main() {
     val cache = Path.of(System.getProperty("quackjs.linear.cache"))
     val report = Path.of(System.getProperty("quackjs.linear.report"))
-    val players = Json.parseToJsonElement(Files.readString(Path.of("fixtures/faraday-200/manifest.json")))
+    val players = Json.parseToJsonElement(Files.readString(Path.of(System.getProperty("quackjs.linear.manifest", "fixtures/faraday-200/manifest.json"))))
         .jsonObject.getValue("players").jsonArray
-    val limit = Integer.getInteger("quackjs.linear.players", 200)
-    check(players.size == 200 && limit in 1..200)
+    val limit = Integer.getInteger("quackjs.linear.players", players.size)
+    check(limit in 1..players.size)
     val statuses = mutableListOf<kotlinx.serialization.json.JsonObject>()
     var mismatches = 0
     var comparisons = 0

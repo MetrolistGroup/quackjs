@@ -6,7 +6,7 @@ plugins {
     `maven-publish`
 }
 group = "com.github.MetrolistGroup.quackjs"
-version = providers.gradleProperty("VERSION_NAME").orElse("0.1.2").get()
+version = providers.gradleProperty("VERSION_NAME").orElse("0.1.3").get()
 kotlin {
     android {
         namespace = "meow.nyx.quackjs"
@@ -143,6 +143,17 @@ tasks.register<JavaExec>("lane32AcceptanceBenchmark") {
     }
 }
 
+tasks.register<JavaExec>("faradaySweep") {
+    group = "verification"
+    description = "Opt-in parity for the current Faraday registry (prepare with scripts/faraday-sweep.mjs)"
+    dependsOn("jvmTestClasses")
+    val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
+    classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
+    mainClass.set("meow.nyx.quackjs.verification.FaradaySweepKt")
+    systemProperty("quackjs.faraday.cache", providers.gradleProperty("faradayCache").orElse("build/faraday-200").get())
+    jvmArgs("-Xmx2g")
+}
+
 // Opt-in source-backed differential checks, separate from the fixture-only default suite.
 tasks.register<JavaExec>("linearNDifferential") {
     group = "verification"
@@ -151,7 +162,8 @@ tasks.register<JavaExec>("linearNDifferential") {
     classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
     mainClass.set("meow.nyx.quackjs.verification.LinearNDifferentialKt")
     systemProperty("quackjs.linear.cache", providers.gradleProperty("faradayCache").orElse("build/faraday-200").get())
-    systemProperty("quackjs.linear.report", providers.gradleProperty("linearReport").orElse(".lane-tmp/linear-n-differential.json").get())
+    systemProperty("quackjs.linear.report", providers.gradleProperty("linearReport").orElse(layout.buildDirectory.file("linear-n-differential.json").get().asFile.path).get())
     providers.gradleProperty("linearPlayers").orNull?.let { systemProperty("quackjs.linear.players", it) }
+    providers.gradleProperty("linearManifest").orNull?.let { systemProperty("quackjs.linear.manifest", it) }
     jvmArgs("-Xmx2g")
 }

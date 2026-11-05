@@ -43,6 +43,29 @@ checks registry/release URL/hash agreement and unique primary-or-alias hints.
 It never reads the Faraday working tree, `.env`, cookies or playback credentials.
 All 200 selected URLs are the original `player_ias.vflset/en_GB/base.js` variant.
 
+### Current registry sweep
+
+The pinned cohort ages. To check every player currently in Faraday, including its
+newest, run the same Node oracle and both Kotlin compile modes against a fresh
+registry read. Run this before changing a consumer's QuackJS pin.
+
+```sh
+git -C /path/to/faraday fetch origin
+node scripts/faraday-sweep.mjs --faraday=/path/to/faraday --cache=/path/to/cache
+./gradlew faradaySweep -PfaradayCache=/path/to/cache --console=plain
+./gradlew linearNDifferential -PfaradayCache=/path/to/cache -PlinearManifest=/path/to/cache/sweep.json
+```
+
+Nothing from a sweep is stored as a fixture; players that fail to download or fail
+the oracle are listed in `sweep.json`.
+
+Faraday `9355842` (2026-11-05, newest `ef321720`): 489 of 494 players passed the oracle
+and then both Kotlin compile modes with no failures; the differential found 0 mismatches in
+1,179,468 comparisons, with plans for 98,280 of 98,289 length cells. The other five
+registry URLs are `player_es6` files, where the oracle fails because Faraday's hints are for
+the `player_ias` twin, and which QuackJS rejects as `Unbalanced player source`, as it did
+before. Their `player_ias` twins pass in both modes, and InnerTubeX prefers that variant.
+
 ### Ordinary read-only verification
 
 Node 26 and JDK 21 were used for the recorded run. No additional dependencies are

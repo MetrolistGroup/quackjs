@@ -21,7 +21,7 @@ class UnsupportedPlayerException(message: String) : IllegalArgumentException(mes
 
 The runtime lives in commonMain and targets Android, JVM, Linux and iOS. It indexes source and follows only the required transform dependencies rather than initializing the whole browser player. Numeric dispatchers are specialized; parsed code and safe constant templates are reused. Mutable containers and execution budgets remain private to each invocation, so compiled programs support concurrent callers without output caching.
 
-`nClass` is a URL wrapper in the original player. QuackJS discovers the n-table update and executes that dependency slice, rather than emulating browser URL handling. Hint-free compilation requires unambiguous executable landmarks; unsupported or ambiguous source fails explicitly. Optimized plans retain live mutation guards and interpreter fallbacks, not fixture/player-ID assumptions.
+`nClass` is a URL wrapper in the original player. QuackJS discovers the n-table update and executes that dependency slice, rather than emulating browser URL handling. Hint-free compilation requires unambiguous executable landmarks; unsupported or ambiguous source fails explicitly. Optimized plans retain live mutation guards and interpreter fallbacks, not fixture/player-ID assumptions. Warm n calls use per-length [rank plans](docs/linear-n.md) derived from the executed AST, with the interpreter as fallback.
 
 ## Bounded string replacement
 

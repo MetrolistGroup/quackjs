@@ -122,7 +122,7 @@ async function source(cache, p) {
     return checkSource(await readFile(path), p);
 }
 
-async function download(cache, p) {
+export async function download(cache, p) {
     const path = join(cache, 'sources', p.id + '.js');
     try { return { bytes: (await source(cache, p)).length, cached: true }; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
