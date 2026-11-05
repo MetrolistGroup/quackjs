@@ -1,11 +1,27 @@
 package meow.nyx.quackjs.verification
 
 import meow.nyx.quackjs.PlayerHints
+import meow.nyx.quackjs.PlayerChallenge
 import meow.nyx.quackjs.PlayerProgram
+import meow.nyx.quackjs.PlayerTransformResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class PlayerParityTest {
+    @Test fun batchesMatchIndependentGoldensWithAndWithoutHints() {
+        for (player in PlayerFixtures.load()) for (discover in listOf(false, true)) {
+            val program = if (discover) PlayerProgram.compile(player.source) else PlayerProgram.compile(
+                player.source, PlayerHints(player.signatureExpression, player.nClass, player.signatureTimestamp),
+            )
+            val cases = player.cases + player.cases.reversed()
+            val requests = cases.map {
+                if (it.kind == "signature") PlayerChallenge.Signature(it.input) else PlayerChallenge.N(it.input)
+            }
+            val expected = cases.map { PlayerTransformResult.Success(it.output) }
+            repeat(2) { assertEquals(expected, program.transformBatch(requests), "${player.id}/discover=$discover") }
+        }
+    }
+
     @Test fun olderPlayer() = verify("4f38b487")
 
     @Test fun intermediatePlayer() = verify("10733253")

@@ -63,6 +63,16 @@ dependency substitution or a copied `:quackjs` module for the hosted migration.
    than nullable `getOrPut`. Keep the service's failure contract: null for failed
    single helpers, no URL for affected batch formats, unaffected direct formats
    still usable. Never substitute the original encrypted challenge on failure.
+   The next QuackJS build adds `transformBatch` (not available in `0.1.2`): map
+   decoded challenges to `PlayerChallenge.Signature` or `PlayerChallenge.N`, then
+   associate the ordered `Success`/`Failure` entries with their affected formats.
+   It memoizes each distinct kind/input, including failures, within that call.
+   Split larger workloads into at most 256 entries per call; memoization does not
+   cross chunk boundaries. Pass `checkCancellation = { coroutineContext.ensureActive() }`
+   to check cancellation before every entry, including memo hits. Callback
+   exceptions propagate, and unrelated runtime exceptions are not converted to
+   transform failures. URL parsing/encoding and direct-format handling remain
+   responsibilities of the consumer.
 5. Remove the retired QuickJS/EJS engines, bundled solver scripts, native runtime
    loaders, dependency aliases and platform-specific embedding/JNI workarounds only
    after all production callers use QuackJS. Remove any old copied QuackJS module
