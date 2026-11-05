@@ -44,7 +44,7 @@ See [oracle methodology and corpus provenance](verification.md).
 `faraday200Benchmark` measures the pinned players from [verification.md](verification.md),
 reading sources from `-PfaradayCache=<dir>`. Per player, it records cold compile plus
 first pair in a warmed JVM, warm signature and n time per call, allocation per call
-and heap retained by a compiled program. Fresh-JVM first calls cover 24 evenly spaced
+and heap retained by a compiled program. Fresh-JVM first calls cover about 25 evenly spaced
 players. Every timed output is compared with the stored goldens outside the timer.
 
 ```sh
@@ -66,7 +66,7 @@ warm n 0.983-1.020, warm signature 0.989-1.016.
 | Metric | Baseline median | New median | Ratio |
 | --- | ---: | ---: | ---: |
 | Cold compile plus first pair | 115.2 ms | 73 ms | 1.57 |
-| Fresh-JVM first call (24 players) | 460 ms | 310 ms | 1.49 |
+| Fresh-JVM first call (25 players) | 460 ms | 310 ms | 1.49 |
 | Warm n call | 195 us | 2.5 us | 64.6 |
 | Warm signature call | 4.14 us | 4.07 us | 1.04 |
 | Warm n allocation | 237 KB | 4 KB | about 49 |
