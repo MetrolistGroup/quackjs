@@ -5,16 +5,22 @@ internal class SourceIndex(val source: String, className: String) {
     private class ScanBudget {
         private var tokens = 0
         private var units = 0
-        fun next(lexer: Lexer, previous: String? = null): Token {
+        private inline fun charge(lexer: Lexer, advance: () -> Unit) {
             if (tokens >= 2_000_000 || units >= 16 * 1024 * 1024) unsupported("Source scan limit exceeded")
             val start = lexer.position
-            val token = lexer.next(previous)
+            advance()
             tokens++
             units += lexer.position - start
             if (units > 16 * 1024 * 1024) unsupported("Source scan limit exceeded")
-            return token
         }
+        fun next(lexer: Lexer, previous: String? = null): Token {
+            var token: Token? = null
+            charge(lexer) { token = lexer.next(previous) }
+            return token!!
+        }
+        fun scan(lexer: Lexer, regexAllowed: Boolean = true) = charge(lexer) { lexer.scan(regexAllowed) }
     }
+
     private data class Assignment(val lhs: List<Token>, val offset: Int, val braces: Int, val parens: Int)
     private data class CallSite(val target: List<Token>?, val offset: Int, val braces: Int, val statement: Boolean)
     private data class References(val names: Set<String>, val lengths: Set<String>, val end: Int)
@@ -36,7 +42,7 @@ internal class SourceIndex(val source: String, className: String) {
         if (className.length > 128 || !identifier(className)) unsupported("Invalid n class hint")
         val lexer = Lexer(source)
         val scans = ScanBudget()
-        val recent = ArrayDeque<Token>()
+        val recent = ScanWindow(source)
         val found = mutableListOf<Assignment>()
         val calls = mutableListOf<CallSite>()
         val updates = mutableListOf<Pair<String, Int>>()
@@ -46,7 +52,7 @@ internal class SourceIndex(val source: String, className: String) {
         var parens = 0
         var count = 0
         var callCount = 0
-        var previous: String? = null
+        var previous = true
         var prefixUpdate = false
         val headers = mutableMapOf<Int, Pair<Int, String?>>()
         var bodyParameters: Pair<Int, String?>? = null
@@ -60,37 +66,38 @@ internal class SourceIndex(val source: String, className: String) {
             updates.add(name to braces)
         }
         while (true) {
-            val token = lexer.next(previous)
-            if (token.kind == -1) break
+            lexer.scan(previous)
+            if (lexer.kind == -1) break
             if (++count > 2_000_000) unsupported("Source token limit exceeded")
+            val tag = lexer.tag
             bodyParameters?.let { parameters ->
-                if (token.kind == 0 && token.text == "{") {
+                if (tag == ScanTags.LBRACE) {
                     activeScopes.addLast(FunctionScope(braces + 1, parameters.first, parameters.second))
                 }
             }
             bodyParameters = null
-            if (pendingStamp != null && token.kind == 0 && token.text in setOf(",", "}")) stamps.add(pendingStamp)
-            pendingStamp = if (token.kind == 2 && token.text.length in 4..6 && recent.lastOrNull()?.text == ":" && recent.elementAtOrNull(recent.size - 2)?.text == "signatureTimestamp") token.text.toIntOrNull() else null
+            if (pendingStamp != null && (tag == ScanTags.COMMA || tag == ScanTags.RBRACE)) stamps.add(pendingStamp)
+            pendingStamp = if (lexer.kind == 2 && lexer.end - lexer.offset in 4..6 && recent.isText(recent.lastIndex, ":") && recent.isText(recent.lastIndex - 1, "signatureTimestamp")) lexer.text.toIntOrNull() else null
             if (prefixUpdate) {
-                if (token.kind == 0 && identifier(token.text)) {
-                    recordUpdate(token.text)
+                if (lexer.kind == 0 && scanIdentifier(source, lexer.offset, lexer.end)) {
+                    recordUpdate(lexer.text)
                     prefixUpdate = false
                 }
-                else if (token.kind != 0 || token.text != "(") prefixUpdate = false
+                else if (tag != ScanTags.LPAREN) prefixUpdate = false
             }
-            if (token.kind == 0 && token.text == "delete") prefixUpdate = true
-            if (token.kind == 0 && (token.text in compoundWrites || token.text == "++" || token.text == "--")) {
+            if (tag == ScanTags.DELETE) prefixUpdate = true
+            if (tag in compoundWriteTags || tag == ScanTags.INC || tag == ScanTags.DEC) {
                 val start = assignmentTargetStart(recent, targetEnd(recent), call = true)
-                if (start >= 0) recordUpdate(recent[start].text)
-                prefixUpdate = token.text == "++" || token.text == "--"
+                if (start >= 0) recordUpdate(recent.text(start))
+                prefixUpdate = tag == ScanTags.INC || tag == ScanTags.DEC
             }
-            if (token.kind == 0 && token.text == "=") {
+            if (tag == ScanTags.EQUAL) {
                 val end = targetEnd(recent)
                 val start = assignmentTargetStart(recent, end)
                 if (start >= 0) {
                     if (found.size >= 100_000) unsupported("Source definition limit exceeded")
-                    val lhs = recent.subList(start, end + 1).toList()
-                    found.add(Assignment(lhs, token.offset + 1, braces, parens))
+                    val lhs = recent.retain(start, end + 1)
+                    found.add(Assignment(lhs, lexer.offset + 1, braces, parens))
                     if (classTarget(lhs, className) && braces < classDepth) {
                         classDepth = braces
                         calls.removeAll { it.braces > classDepth }
@@ -100,35 +107,32 @@ internal class SourceIndex(val source: String, className: String) {
                     }
                 }
             }
-            if (token.kind == 0 && token.text == "(") {
+            if (tag == ScanTags.LPAREN) {
                 val start = assignmentTargetStart(recent, call = true)
-                val namedFunction = recent.getOrNull(recent.lastIndex - 1)
-                if (start >= 0 && start == recent.lastIndex && recent[start].text == "function") headers[parens] = token.offset + 1 to null
-                else if (namedFunction?.kind == 0 && namedFunction.text == "function") headers[parens] = token.offset + 1 to recent.last().text
-                if (start >= 0 && recent[start].text !in nonCalls || start < 0 && recent.lastOrNull()?.text in listOf(")", "?.")) {
+                if (start >= 0 && start == recent.lastIndex && recent.isText(start, "function")) headers[parens] = lexer.offset + 1 to null
+                else if (recent.lastIndex >= 1 && recent.kind(recent.lastIndex - 1) == 0 && recent.isText(recent.lastIndex - 1, "function")) headers[parens] = lexer.offset + 1 to recent.text(recent.lastIndex)
+                if (start >= 0 && nonCalls.none { recent.isText(start, it) } || start < 0 && (recent.isText(recent.lastIndex, ")") || recent.isText(recent.lastIndex, "?."))) {
                     if (callCount++ >= 100_000) unsupported("Source call limit exceeded")
                     // Only call effects at the shallowest class depth can be consumed below.
                     if (braces <= classDepth) {
-                        val before = recent.getOrNull(start - 1)
-                        val statement = start >= 0 && (before == null || before.kind == 0 && before.text in setOf(";", "{", "}", ")", "else"))
-                        val target = if (start < 0) null else recent.subList(start, recent.size).toList()
-                        calls.add(CallSite(target, token.offset + 1, braces, statement))
+                        val statement = start >= 0 && (start == 0 || recent.kind(start - 1) == 0 && statementPrefixes.any { recent.isText(start - 1, it) })
+                        val target = if (start < 0) null else recent.retain(start, recent.size)
+                        calls.add(CallSite(target, lexer.offset + 1, braces, statement))
                     }
                 }
             }
-            if (token.kind == 0) when (token.text) {
-                "{" -> braces++
-                "}" -> {
+            when (tag) {
+                ScanTags.LBRACE -> braces++
+                ScanTags.RBRACE -> {
                     if (activeScopes.lastOrNull()?.depth == braces) activeScopes.removeLast()
                     braces--
                 }
-                "(" -> parens++
-                ")" -> { parens--; bodyParameters = headers.remove(parens) }
+                ScanTags.LPAREN -> parens++
+                ScanTags.RPAREN -> { parens--; bodyParameters = headers.remove(parens) }
             }
             if (braces < 0 || parens < 0 || braces > 512 || parens > 512) unsupported("Source nesting limit exceeded")
-            if (recent.size == 96) recent.removeFirst()
-            recent.addLast(token)
-            previous = token.context
+            recent.add(lexer)
+            previous = lexer.regexAfter
         }
         if (braces != 0 || parens != 0) unsupported("Unbalanced player source")
         val classes = found.filter { classTarget(it.lhs, className) }
@@ -153,7 +157,7 @@ internal class SourceIndex(val source: String, className: String) {
         for (write in writes) {
             val owner = write.lhs.first().text
             val direct = referenceBase(write.offset, scans)
-            val first = if (direct == null) scans.next(Lexer(source, write.offset)) else null
+            val first = if (direct == null) Lexer(source, write.offset).also { scans.scan(it) } else null
             if (direct != null) {
                 if (write.lhs.size > 1) contents.getOrPut(owner) { mutableSetOf() }.add(direct.name)
                 else if (direct.projected) origins.getOrPut(owner) { mutableSetOf() }.add(direct.name)
@@ -161,12 +165,12 @@ internal class SourceIndex(val source: String, className: String) {
                     aliases.getOrPut(owner) { mutableSetOf() }.add(direct.name)
                     aliases.getOrPut(direct.name) { mutableSetOf() }.add(owner)
                 }
-            } else if (first?.kind == 0 && first.text in listOf("[", "{")) {
+            } else if (first != null && (first.tag == ScanTags.LBRACKET || first.tag == ScanTags.LBRACE)) {
                 val refs = argumentReferences(first.offset + 1, scans, if (first.text == "[") "]" else "}", first.text)
                 contents.getOrPut(owner) { mutableSetOf() }.addAll(refs.names)
                 lengthContents.getOrPut(owner) { mutableSetOf() }.addAll(refs.lengths)
-                val after = scans.next(Lexer(source, refs.end), first.text)
-                if (write.lhs.size == 1 && first.text == "[" && after.kind == 0 && after.text in setOf(";", ",", ")", "}")) arrays.add(owner)
+                val after = Lexer(source, refs.end).also { scans.scan(it, true) }
+                if (write.lhs.size == 1 && first.tag == ScanTags.LBRACKET && after.tag in expressionEnds) arrays.add(owner)
             }
         }
         val arrayQueue = ArrayDeque(arrays)
@@ -192,8 +196,8 @@ internal class SourceIndex(val source: String, className: String) {
             val key = ((member?.key as? Lit)?.value as? JsString)?.value
             val pure = builtin?.takeIf { key != null && key in readOnlyPredicates.getValue(it) }
             val reverse = if (target is Member && target.target is Id && target.key == Lit("reverse") && call.statement) {
-                val after = scans.next(Lexer(source, refs.end), ")")
-                target.target.name.takeIf { after.kind == 0 && after.text in setOf(";", "}") }
+                val after = Lexer(source, refs.end).also { scans.scan(it, false) }
+                target.target.name.takeIf { after.tag == ScanTags.SEMI || after.tag == ScanTags.RBRACE }
             } else null
             CallEffects(call.target?.takeIf { it.size > 1 }?.first()?.text, pure, reverse, refs)
         }
@@ -286,8 +290,8 @@ internal class SourceIndex(val source: String, className: String) {
             } else if (entries.size != 1 || writeCounts[name] != 1) DefinitionKind.UNKNOWN
             else {
                 val offset = entries.single().offset
-                val first = scans.next(Lexer(source, offset))
-                if (first.kind == 0 && first.text in setOf("function", "{")) DefinitionKind.UNKNOWN
+                val first = Lexer(source, offset).also { scans.scan(it) }
+                if (first.tag == ScanTags.FUNCTION || first.tag == ScanTags.LBRACE) DefinitionKind.UNKNOWN
                 else {
                     val tokens = slice(offset, scans)
                     val expr = try { Parser(tokens, source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
@@ -304,86 +308,95 @@ internal class SourceIndex(val source: String, className: String) {
         val lexer = Lexer(source, offset)
         val references = mutableSetOf<String>()
         val lengths = mutableSetOf<String>()
-        var previous: String? = opening
+        var previous = true
+        var previousTag = ScanTags.code(opening, 0, opening.length)
+        val closingTag = ScanTags.code(closing, 0, closing.length)
         var depth = 0
         var count = 0
         var functionDepth: Int? = null
         var functionBody = false
         var parametersClosed = false
-        var reference: Token? = null
-        var beforeReference: String? = null
+        var reference: String? = null
+        var beforeReference = -1
         while (true) {
-            val token = scans.next(lexer, previous)
+            scans.scan(lexer, previous)
             if (++count > 150_000) unsupported("Initialization call limit exceeded")
-            if (token.kind == -1) unsupported("Unclosed initialization call")
+            if (lexer.kind == -1) unsupported("Unclosed initialization call")
+            val tag = lexer.tag
             reference?.let {
                 val projection = Lexer(source, lexer.position)
-                val length = if (token.kind != 0) false else when (token.text) {
-                    "." -> scans.next(projection, ".").let { it.kind == 0 && it.text == "length" }
-                    "[" -> scans.next(projection, "[").let { it.kind == 1 && it.text == "length" } && scans.next(projection, "<value>").let { it.kind == 0 && it.text == "]" }
+                val length = when (tag) {
+                    ScanTags.DOT -> { scans.scan(projection, false); projection.tag == ScanTags.LENGTH }
+                    ScanTags.LBRACKET -> {
+                        scans.scan(projection, true)
+                        projection.kind == 1 && projection.text == "length" && run { scans.scan(projection, false); projection.tag == ScanTags.RBRACKET }
+                    }
                     else -> false
                 }
-                if (!(token.kind == 0 && token.text == ":" && beforeReference in listOf("{", ","))) {
-                    if (length) lengths.add(it.text) else references.add(it.text)
+                if (!(tag == ScanTags.COLON && (beforeReference == ScanTags.LBRACE || beforeReference == ScanTags.COMMA))) {
+                    if (length) lengths.add(it) else references.add(it)
                 }
             }
             reference = null
             // Do not confuse property names or a callback's locals with escaped player globals.
-            if (token.kind == 0 && token.text == "function" && functionDepth == null) functionDepth = depth
-            if (token.kind == 0 && functionDepth == null && previous != "." && identifier(token.text)) { reference = token; beforeReference = previous }
-            if (token.kind == 0) {
+            if (tag == ScanTags.FUNCTION && functionDepth == null) functionDepth = depth
+            if (lexer.kind == 0 && functionDepth == null && previousTag != ScanTags.DOT && scanIdentifier(source, lexer.offset, lexer.end)) { reference = lexer.text; beforeReference = previousTag }
+            if (lexer.kind == 0) {
                 if (functionDepth != null) {
-                    if (!functionBody && token.text == ")" && depth == functionDepth + 1) parametersClosed = true
-                    if (!functionBody && parametersClosed && token.text == "{" && depth == functionDepth) functionBody = true
-                    else if (functionBody && token.text == "}" && depth == functionDepth + 1) { functionDepth = null; functionBody = false; parametersClosed = false }
+                    if (!functionBody && tag == ScanTags.RPAREN && depth == functionDepth + 1) parametersClosed = true
+                    if (!functionBody && parametersClosed && tag == ScanTags.LBRACE && depth == functionDepth) functionBody = true
+                    else if (functionBody && tag == ScanTags.RBRACE && depth == functionDepth + 1) { functionDepth = null; functionBody = false; parametersClosed = false }
                 }
-                if (depth == 0 && token.text == closing) return References(references, lengths, lexer.position)
-                when (token.text) {
-                    "(", "[", "{" -> depth++
-                    ")", "]", "}" -> depth--
+                if (depth == 0 && tag == closingTag) return References(references, lengths, lexer.position)
+                when (tag) {
+                    ScanTags.LPAREN, ScanTags.LBRACKET, ScanTags.LBRACE -> depth++
+                    ScanTags.RPAREN, ScanTags.RBRACKET, ScanTags.RBRACE -> depth--
                 }
             }
-            previous = token.context
+            previous = lexer.regexAfter
+            previousTag = tag
         }
     }
 
     /** Link direct reference paths without evaluating unrelated initializers. */
     private fun referenceBase(offset: Int, scans: ScanBudget): Reference? {
         val lexer = Lexer(source, offset)
-        var previous: String? = null
+        var previous = true
         var count = 0
-        fun next(): Token? {
-            if (++count > 1024) return null
-            return scans.next(lexer, previous).also { previous = it.context }
+        fun next(): Boolean {
+            if (++count > 1024) return false
+            scans.scan(lexer, previous)
+            previous = lexer.regexAfter
+            return true
         }
-        var token = next() ?: return null
+        if (!next()) return null
         var groups = 0
-        while (token.kind == 0 && token.text == "(") { groups++; token = next() ?: return null }
-        if (token.kind != 0 || !identifier(token.text) || token.text in setOf("true", "false", "null", "undefined", "NaN", "Infinity")) return null
-        val base = token.text
+        while (lexer.tag == ScanTags.LPAREN) { groups++; if (!next()) return null }
+        if (lexer.kind != 0 || !scanIdentifier(source, lexer.offset, lexer.end) || lexer.tag in primitiveTags) return null
+        val base = lexer.text
         var projected = false
-        token = next() ?: return Reference(base, projected)
-        while (token.kind == 0 && token.text in listOf(".", "[")) {
+        if (!next()) return Reference(base, projected)
+        while (lexer.tag == ScanTags.DOT || lexer.tag == ScanTags.LBRACKET) {
             projected = true
-            if (token.text == ".") {
-                token = next() ?: return Reference(base, projected)
-                if (token.kind != 0 || !identifier(token.text)) return null
+            if (lexer.tag == ScanTags.DOT) {
+                if (!next()) return Reference(base, projected)
+                if (lexer.kind != 0 || !scanIdentifier(source, lexer.offset, lexer.end)) return null
             } else {
                 var depth = 1
                 while (depth > 0) {
-                    token = next() ?: return Reference(base, projected)
-                    if (token.kind == -1) return null
-                    if (token.kind == 0 && token.text == "[") depth++
-                    if (token.kind == 0 && token.text == "]") depth--
+                    if (!next()) return Reference(base, projected)
+                    if (lexer.kind == -1) return null
+                    if (lexer.tag == ScanTags.LBRACKET) depth++
+                    if (lexer.tag == ScanTags.RBRACKET) depth--
                 }
             }
-            token = next() ?: return Reference(base, projected)
+            if (!next()) return Reference(base, projected)
         }
         while (groups > 0) {
-            if (token.kind != 0 || token.text != ")") return null
-            groups--; token = next() ?: return Reference(base, projected)
+            if (lexer.tag != ScanTags.RPAREN) return null
+            groups--; if (!next()) return Reference(base, projected)
         }
-        return Reference(base, projected).takeIf { token.kind == -1 || token.kind == 0 && token.text in listOf(";", ",", ")", "}") }
+        return Reference(base, projected).takeIf { lexer.kind == -1 || lexer.tag in expressionEnds }
     }
 
     fun hasDefinition(name: String): Boolean = names.containsKey(name)
@@ -444,30 +457,31 @@ internal class SourceIndex(val source: String, className: String) {
         private val readOnlyPredicates = mapOf("Array" to setOf("isArray"), "Number" to setOf("isNaN", "isFinite"), "String" to emptySet())
         fun identifier(name: String): Boolean = name.isNotEmpty() && name[0].let { it in 'A'..'Z' || it in 'a'..'z' || it == '_' || it == '$' } && name.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '$' }
         private val nonCalls = setOf("function", "if", "while", "for", "switch", "catch", "with", "typeof", "void", "delete", "return", "throw", "new")
-        private val compoundWrites = setOf("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??=")
+        private val compoundWriteTags = intArrayOf(ScanTags.PLUS_ASSIGN, ScanTags.MINUS_ASSIGN, ScanTags.STAR_ASSIGN, ScanTags.SLASH_ASSIGN, ScanTags.MOD_ASSIGN, ScanTags.AMP_ASSIGN, ScanTags.PIPE_ASSIGN, ScanTags.CARET_ASSIGN, ScanTags.SHL_ASSIGN, ScanTags.SHR_ASSIGN, ScanTags.USHR_ASSIGN, ScanTags.POW_ASSIGN, ScanTags.AND_ASSIGN, ScanTags.OR_ASSIGN, ScanTags.NULL_ASSIGN)
+        private val expressionEnds = intArrayOf(ScanTags.SEMI, ScanTags.COMMA, ScanTags.RPAREN, ScanTags.RBRACE)
+        private val primitiveTags = intArrayOf(ScanTags.TRUE, ScanTags.FALSE, ScanTags.NULL, ScanTags.UNDEFINED, ScanTags.NAN, ScanTags.INFINITY)
+        private val statementPrefixes = setOf(";", "{", "}", ")", "else")
         private val targetPrefixes = setOf("var", "let", "const", ";", ",", "{", "}", "(", ")")
         private val callPrefixes = setOf("=", "return", "new", "(", "?", ":")
         private fun classTarget(tokens: List<Token>, name: String): Boolean =
             tokens.size == 3 && tokens[0].text == "g" && tokens[1].text == "." && tokens[2].text == name
-        private fun targetEnd(tokens: List<Token>): Int {
+        private fun targetEnd(tokens: ScanWindow): Int {
             var end = tokens.lastIndex
-            while (end >= 0 && tokens[end].kind == 0 && tokens[end].text == ")") end--
+            while (end >= 0 && tokens.kind(end) == 0 && tokens.isText(end, ")")) end--
             return end
         }
-        private fun assignmentTargetStart(tokens: List<Token>, end: Int = tokens.lastIndex, call: Boolean = false): Int {
+        private fun assignmentTargetStart(tokens: ScanWindow, end: Int = tokens.lastIndex, call: Boolean = false): Int {
             var start = end
             if (start < 0) return -1
             var brackets = 0
             while (start >= 0) {
-                val token = tokens[start]
-                if (token.kind != 0) { if (brackets == 0) return -1; start--; continue }
-                if (token.text == "]") brackets++
-                if (token.text == "[") brackets--
-                if (brackets == 0 && token.text != "." && token.text != "[" && token.text != "]") {
-                    if (!identifier(token.text)) return -1
-                    if (start > 0 && tokens[start - 1].text == ".") { start--; continue }
-                    val before = tokens.getOrNull(start - 1)?.text
-                    if (before != null && before !in targetPrefixes && !(call && before in callPrefixes)) return -1
+                if (tokens.kind(start) != 0) { if (brackets == 0) return -1; start--; continue }
+                if (tokens.isText(start, "]")) brackets++
+                if (tokens.isText(start, "[")) brackets--
+                if (brackets == 0 && !tokens.isText(start, ".") && !tokens.isText(start, "[") && !tokens.isText(start, "]")) {
+                    if (!tokens.identifier(start)) return -1
+                    if (tokens.isText(start - 1, ".")) { start--; continue }
+                    if (start > 0 && targetPrefixes.none { tokens.isText(start - 1, it) } && !(call && callPrefixes.any { tokens.isText(start - 1, it) })) return -1
                     return start
                 }
                 start--

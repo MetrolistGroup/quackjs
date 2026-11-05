@@ -93,18 +93,20 @@ public class PlayerProgram private constructor(
             }
             // A landmark inside a comment, string or template is never executable code.
             val wanted = candidates.flatMap { it.locations }.toSet()
+            val byOffset = wanted.groupBy { it.first }
             val actual = mutableSetOf<Pair<Int, String>>()
             val lexer = Lexer(source)
-            var previous: String? = null
+            var previous = true
             var count = 0
             val end = wanted.maxOfOrNull { it.first } ?: -1
             while (end >= 0) {
-                val token = lexer.next(previous)
-                if (token.kind == -1 || token.offset > end) break
+                lexer.scan(previous)
+                if (lexer.kind == -1 || lexer.offset > end) break
                 if (++count > 2_000_000) unsupported("Source token limit exceeded")
-                val location = token.offset to token.text
-                if (token.kind == 0 && location in wanted) actual.add(location)
-                previous = token.context
+                if (lexer.kind == 0) for (location in byOffset[lexer.offset].orEmpty()) {
+                    if (lexer.end - lexer.offset == location.second.length && source.regionMatches(lexer.offset, location.second, 0, location.second.length)) actual.add(location)
+                }
+                previous = lexer.regexAfter
             }
             val valid = candidates.filter { actual.containsAll(it.locations) }.map { it.signature to it.nClass }.toSet()
             if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
