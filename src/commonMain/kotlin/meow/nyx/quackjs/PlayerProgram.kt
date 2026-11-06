@@ -64,18 +64,16 @@ public class PlayerProgram private constructor(
          */
         public fun compile(playerJs: String, hints: PlayerHints? = null): PlayerProgram {
             if (playerJs.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
-            val landmark = if (hints == null) derive(playerJs) else null
-            val derived = hints ?: landmark!!.hints
-            val source = SourceIndex(playerJs, derived.nClass)
-            landmark?.let { derivedLandmark ->
-                for (offset in derivedLandmark.signatureOffsets) source.requireGlobalCall(offset, derived.signatureExpression.substringBefore("("))
-            }
+            val source = SourceIndex(playerJs, hints?.nClass)
+            val derived = hints ?: source.derivedHints!!
             if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
             val signature = Parser(Lexer(derived.signatureExpression).tokens(), derived.signatureExpression, source.compilationBudget).completeExpression()
             validateSignatureExpression(signature)
-            val runtime = Runtime(source, recordDispatch = true, compilationBudget = source.compilationBudget)
             try {
-                val plan = discoverN(source, derived.nClass, runtime)
+                val plan = discoverN(source, derived.nClass, Runtime(source, recordDispatch = true, compilationBudget = source.compilationBudget))
+                val runtime = Runtime(source, recordDispatch = true, compilationBudget = source.compilationBudget)
+                // Publish only dependencies used by the selected plan, after discarded probes.
+                plan.execute(runtime, "KdrqFlzJXl9EcCwlmEy")
                 val result = runtime.expression(signature, mapOf("INPUT" to JsString("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")))
                 if (result !is JsString) unsupported("Signature transform did not return a string")
                 val parsed = runtime.definitions.toMap()
@@ -99,62 +97,6 @@ public class PlayerProgram private constructor(
             } catch (error: JsThrown) {
                 unsupported("Player initialization failed: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
             }
-        }
-
-        private data class Derived(val hints: PlayerHints, val signatureOffsets: List<Int>)
-
-        private fun derive(source: String): Derived {
-            data class Landmark(val signature: String, val nClass: String, val signatureOffset: Int, val locations: List<Pair<Int, String>>, val identifiers: Set<Int>)
-            val candidates = mutableListOf<Landmark>()
-            var from = 0
-            while (true) {
-                val alr = source.indexOf(".set(\"alr\",\"yes\")", from)
-                if (alr < 0) break
-                from = alr + 1
-                val beforeStart = (alr - 160).coerceAtLeast(0)
-                val before = source.substring(beforeStart, alr)
-                val after = source.substring(alr, (alr + 260).coerceAtMost(source.length))
-                val receiver = Regex("[A-Za-z0-9_$]+$").find(before) ?: continue
-                val constructors = Regex("([A-Za-z0-9_$]+)\\s*=\\s*(new\\s+g\\.([A-Za-z0-9_$]+)\\s*\\([^,()]+,\\s*!0\\s*\\))").findAll(before)
-                    .filter { it.groupValues[1] == receiver.value }.toList()
-                val n = constructors.singleOrNull() ?: continue
-                for (sig in Regex("([A-Za-z0-9_$]+)\\((\\d+),(\\d+),\\s*[A-Za-z0-9_$]+\\(\\d+,\\d+,").findAll(after)) {
-                    if (candidates.size >= 1024) unsupported("Player landmark limit exceeded")
-                    val sigOffset = alr + sig.range.first
-                    val constructorOffset = beforeStart + n.range.first
-                    val receiverOffset = beforeStart + receiver.range.first
-                    candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[3], sigOffset,
-                        listOf(alr to ".", constructorOffset to receiver.value, beforeStart + n.groups[2]!!.range.first to "new", receiverOffset to receiver.value, sigOffset to sig.groupValues[1]),
-                        setOf(constructorOffset, receiverOffset, sigOffset)))
-                }
-            }
-            // A landmark inside a comment, string or template is never executable code.
-            val wanted = candidates.flatMap { it.locations }.toSet()
-            val byOffset = wanted.groupBy { it.first }
-            val actual = mutableSetOf<Pair<Int, String>>()
-            val lexer = Lexer(source)
-            var previous = true
-            var previousTag = -1
-            val qualified = mutableSetOf<Int>()
-            var count = 0
-            val end = wanted.maxOfOrNull { it.first } ?: -1
-            while (end >= 0) {
-                lexer.scan(previous)
-                if (lexer.kind == -1 || lexer.offset > end) break
-                if (++count > 2_000_000) unsupported("Source token limit exceeded")
-                if (lexer.kind == 0) for (location in byOffset[lexer.offset].orEmpty()) {
-                    if (lexer.end - lexer.offset == location.second.length && source.regionMatches(lexer.offset, location.second, 0, location.second.length)) actual.add(location)
-                }
-                if (lexer.offset in byOffset && (previousTag == ScanTags.DOT || previousTag == ScanTags.OPTIONAL || previousTag == ScanTags.NEW)) qualified.add(lexer.offset)
-                previousTag = lexer.tag
-                previous = lexer.regexAfter
-            }
-            val executable = candidates.filter { actual.containsAll(it.locations) }
-            if (executable.any { landmark -> landmark.identifiers.any { it in qualified } }) unsupported("Unsupported qualified signature/n landmark")
-            val valid = executable.distinctBy { it.signature to it.nClass }
-            if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
-            val selected = valid.single()
-            return Derived(PlayerHints(selected.signature, selected.nClass, 0), executable.map { it.signatureOffset }.distinct())
         }
 
         private fun validateSignatureExpression(expr: Expr) {

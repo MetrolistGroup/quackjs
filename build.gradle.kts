@@ -85,6 +85,7 @@ tasks.register<JavaExec>("playerBenchmark") {
     val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
     classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
     mainClass.set("meow.nyx.quackjs.verification.PlayerBenchmarkKt")
+    providers.gradleProperty("bench.qperf").orNull?.let { systemProperty("quackjs.bench.qperf", it) }
     systemProperty("quackjs.fixtures", layout.projectDirectory.dir("fixtures").asFile.absolutePath)
     jvmArgs("-Xms512m", "-Xmx2g")
     doFirst {
