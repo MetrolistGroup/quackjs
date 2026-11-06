@@ -31,6 +31,24 @@ class PlayerProgramTest {
         assertEquals("\ude00\ud83d\u2603", p.transformN("\u2603\ud83d\ude00"))
     }
 
+    @Test fun semanticGuardsKeepSignatureAndNTransformBranchesCorrect() {
+        for (body in listOf(
+            "try{null.p}catch(e){return e.name==='TypeError'?x.slice(1):x.split('').reverse().join('')}",
+            "return ('length' in x.split(''))?x.slice(1):x.split('').reverse().join('');",
+            "var a=['a'];var i=a.indexOf('b',{valueOf:function(){a.push('b');return 0}});return i===-1?x.slice(1):x;",
+            "var a=[1,2];var b=a.slice(0,{valueOf:function(){a.length=0;return 2}});return b.length===2&&!(0 in b)?x.slice(1):x;",
+            "var a=[1,2,3];a.splice(0,{valueOf:function(){a.length=0;return 1}});return a.length===2&&!(0 in a)?x.slice(1):x;",
+            "return Number('0x200000000000011')%64===32?x.slice(1):x;",
+            "return (Number('0x1000000000000081')>>>0)===256?x.slice(1):x;",
+        )) {
+            val program = compile(body, update = "o.set('n',sig(o.V.n));")
+            repeat(2) {
+                assertEquals("bc", program.decipherSignature("abc"), body)
+                assertEquals("bc", program.transformN("abc"), body)
+            }
+        }
+    }
+
     @Test fun cachedInitializersKeepLiveAliasesClosuresAndNestedStateIndependent() {
         val p = compile("state.nested.a.push(x);return alias.nested.a.length+':'+reader();", extra = """
             var state={nested:{a:[]}};

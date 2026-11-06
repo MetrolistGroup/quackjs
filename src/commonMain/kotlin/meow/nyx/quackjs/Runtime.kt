@@ -9,7 +9,8 @@ import kotlin.math.log2
 import kotlin.math.sqrt
 
 internal class JsThrown(val value: JsValue) : Exception() {
-    constructor(message: String) : this(JsString(message))
+    // Engine-specific messages stay unsupported; implicit errors still expose their JavaScript name.
+    constructor(name: String = "TypeError") : this(JsObject(mutableMapOf("name" to JsString(name)), builtin = "Error"))
 }
 internal class Env(val parent: Env? = null, private val names: Map<String, Int>? = null) {
     private var entries: MutableMap<String, JsValue>? = null
@@ -52,7 +53,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         if (allocated > 2_000_000) unsupported("Allocation limit exceeded")
     }
     fun array(items: List<JsValue>): JsArray { allocate(items.size); return JsArray(items.toMutableList()) }
-    private fun arrayRange(items: List<JsValue>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items[start + it] }) }
+    private fun arrayRange(items: List<JsValue>, start: Int, count: Int): JsArray { allocate(count); return JsArray(MutableList(count) { items.getOrElse(start + it) { Hole } }) }
     fun string(value: String): JsString { allocate(value.length); return JsString(value) }
     private fun number(value: JsValue): Double {
         if (value is JsNumber && conversionDepth < 64) return value.value
@@ -92,7 +93,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             val result = invoke(method, value, emptyList())
             if (!isRuntimeObject(result)) return result
         }
-        throw JsThrown("Cannot convert object to primitive value")
+        throw JsThrown()
     }
     internal fun stringValue(value: JsValue): String = text(primitive(value, PrimitiveHint.STRING))
     private fun arrayAlwaysCoercesToNaN(root: JsArray): Boolean {
@@ -343,7 +344,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                         is Completion.Returned -> flow.value
                     }
                 }
-                else -> throw JsThrown("Value is not callable")
+                else -> throw JsThrown()
             }
         } finally { calls-- }
     }
@@ -438,7 +439,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             if (analysis != null && rawKey is LinearValue) linearReject("input-dependent write position")
             if (obj === JsNull || obj === Undefined) {
                 if (!read) value(Undefined)
-                throw JsThrown("Cannot set property on null/undefined")
+                throw JsThrown()
             }
             val key = if (numericIndex(rawKey) != null) rawKey else JsString(stringValue(rawKey))
             val result = value(if (read) property(obj, key) else Undefined)
@@ -455,7 +456,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             is JsArray -> {
                 if (key == "length") {
                     val length = number(value)
-                    if (length < 0 || length != floor(length)) throw JsThrown("Invalid array length")
+                    if (length < 0 || length != floor(length)) throw JsThrown("RangeError")
                     if (length > 65_536) unsupported("Array size limit exceeded")
                     val size = length.toInt()
                     if (size > obj.values.size) { allocate(size - obj.values.size); repeat(size - obj.values.size) { obj.values.add(Hole) } }
@@ -468,7 +469,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                     else setIndex(obj, i, value)
                 }
             }
-            JsNull, Undefined -> throw JsThrown("Cannot set property on null/undefined")
+            JsNull, Undefined -> throw JsThrown()
             else -> unsupported("Unsupported property assignment")
         }
     }
@@ -483,7 +484,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             symbolicContext()
             return analysis.lookup(this, obj, key)
         }
-        if (obj === JsNull || obj === Undefined) throw JsThrown("Cannot read property on null/undefined")
+        if (obj === JsNull || obj === Undefined) throw JsThrown()
         val i = numericIndex(key)
         if (i != null) when (obj) {
             is JsArray -> { tick(); val value = obj.values.getOrElse(i) { Undefined }; return if (value === Hole) Undefined else value }
@@ -494,7 +495,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     fun get(obj: JsValue, key: String): JsValue {
         tick(key.length + 1)
-        if (obj === JsNull || obj === Undefined) throw JsThrown("Cannot read '$key' on null/undefined")
+        if (obj === JsNull || obj === Undefined) throw JsThrown()
         if ((obj is JsFunction || obj is Native) && key == "call") return callMethod
         if ((obj is JsFunction || obj is Native) && key == "apply") return applyMethod
         if (obj is Native) return obj.fields[key] ?: unsupported("Unsupported built-in property '$key'")
@@ -529,7 +530,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         if (obj is LinearNumber) linearReject("symbolic numeric property")
         if (key == "toString" && (obj is JsNumber || obj is JsBoolean)) return Native(functionName = "toString") { r, self, a ->
-            if (obj is JsBoolean && self !is JsBoolean || obj !is JsBoolean && self !is JsNumber) throw JsThrown("Invalid primitive method receiver")
+            if (obj is JsBoolean && self !is JsBoolean || obj !is JsBoolean && self !is JsNumber) throw JsThrown()
             if (a.isNotEmpty() && r.number(a[0]) != 10.0) unsupported("Unsupported number radix")
             JsString(text(self))
         }
@@ -539,11 +540,17 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         return Undefined
     }
     private companion object {
+    val unsupportedObjectProperties = setOf("constructor", "__proto__", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__")
+    val unsupportedArrayProperties = setOf(
+        "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast", "findLastIndex",
+        "flat", "flatMap", "includes", "keys", "lastIndexOf", "map", "reduce", "reduceRight", "some", "sort",
+        "toReversed", "toSorted", "toSpliced", "values", "with",
+    )
     // Native methods are receiver-driven and immutable; only Runtime and the receiver own state.
     val callMethod = Native(functionName = "call") { r, self, a -> r.invoke(self, a.getOrElse(0) { Undefined }, a.drop(1)) }
     val applyMethod = Native(functionName = "apply") { r, self, a ->
         val args = a.getOrElse(1) { Undefined }
-        val items = if (args === JsNull || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown("Invalid apply arguments")
+        val items = if (args === JsNull || args === Undefined) emptyList() else (args as? JsArray)?.values ?: throw JsThrown()
         r.tick(items.size); r.allocate(items.size)
         r.invoke(self, a.getOrElse(0) { Undefined }, items.map { if (it === Hole) Undefined else it })
     }
@@ -588,14 +595,23 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             "unshift" -> Native { r, self, a -> val v = arrayValues(self); r.tick(v.size); r.allocate(a.size); if (v.size + a.size > 65_536) unsupported("Array size limit exceeded"); if (a.size == 1) v.add(0, a[0]) else if (a.isNotEmpty()) v.addAll(0, a); JsNumber(v.size.toDouble()) }
             "pop" -> Native { _, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else v.removeAt(v.lastIndex).let { if (it === Hole) Undefined else it } }
             "shift" -> Native { r, self, _ -> val v = arrayValues(self); if (v.isEmpty()) Undefined else { r.tick(v.size); v.removeAt(0).let { if (it === Hole) Undefined else it } } }
-            "slice" -> Native { r, self, a -> val v = arrayValues(self); val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, v.size); val end = if (a.size < 2 || a[1] === Undefined) v.size else r.relative(a[1], v.size); val count = (end - start).coerceAtLeast(0); r.tick(count); r.arrayRange(v, start, count) }
+            "slice" -> Native { r, self, a ->
+                val v = arrayValues(self); val length = v.size
+                val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, length)
+                val end = if (a.size < 2 || a[1] === Undefined) length else r.relative(a[1], length)
+                val count = (end - start).coerceAtLeast(0)
+                r.tick(count); r.arrayRange(v, start, count)
+            }
             "splice" -> Native { r, self, a ->
-                val v = arrayValues(self)
-                val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, v.size)
-                val count = if (a.isEmpty()) 0 else if (a.size < 2) v.size - start else r.integer(a[1]).coerceIn(0, v.size - start)
+                val v = arrayValues(self); val length = v.size
+                val start = r.relative(a.getOrElse(0) { JsNumber(0.0) }, length)
+                val count = if (a.isEmpty()) 0 else if (a.size < 2) length - start else r.integer(a[1]).coerceIn(0, length - start)
                 val added = (a.size - 2).coerceAtLeast(0)
-                if (v.size - count + added > 65_536) unsupported("Array size limit exceeded")
-                val removed = r.arrayRange(v, start, count); r.allocate(added); r.tick(v.size)
+                if (length - count + added > 65_536) unsupported("Array size limit exceeded")
+                val removed = r.arrayRange(v, start, count); r.allocate(added); r.tick(length)
+                // No user code runs after coercion, so normalize missing live entries to holes before moving them.
+                if (v.size < length) { r.allocate(length - v.size); repeat(length - v.size) { v.add(Hole) } }
+                else while (v.size > length) v.removeAt(v.lastIndex)
                 val change = added - count
                 when {
                     count == v.size && added == 0 -> v.clear()
@@ -620,7 +636,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 val v = target.values
                 val length = v.size
                 val callback = a.getOrElse(0) { Undefined }
-                if (callback !is JsFunction && callback !is Native) throw JsThrown("Invalid forEach callback")
+                if (callback !is JsFunction && callback !is Native) throw JsThrown()
                 val selfArg = a.getOrElse(1) { Undefined }
                 // Without closures or arguments, a callback cannot retain its invocation frame.
                 var frame: Env? = null
@@ -644,21 +660,24 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             }
             "indexOf" -> Native { r, self, a ->
                 val v = arrayValues(self)
-                val start = r.relative(a.getOrElse(1) { JsNumber(0.0) }, v.size)
+                val length = v.size
+                if (length == 0) return@Native JsNumber(-1.0)
+                val start = r.relative(a.getOrElse(1) { JsNumber(0.0) }, length)
+                val end = minOf(length, v.size)
                 val search = a.getOrElse(0) { Undefined }
                 var result = -1
                 if (search is JsString && search.value.length == 1 || search is JsBoolean) {
-                    val found = if (start == 0) v.indexOf(search) else v.subList(start, v.size).indexOf(search)
-                    r.tick(if (found < 0) v.size - start else found + 1)
+                    val found = if (start >= end) -1 else if (start == 0 && end == v.size) v.indexOf(search) else v.subList(start, end).indexOf(search)
+                    r.tick(if (found < 0) length - start else found + 1)
                     if (found >= 0) result = start + found
-                } else for (i in start until v.size) { r.tick(); if (v[i] !== Hole && r.equal(v[i], search, true)) { result = i; break } }
+                } else for (i in start until length) { r.tick(); val item = v.getOrElse(i) { Hole }; if (item !== Hole && r.equal(item, search, true)) { result = i; break } }
                 JsNumber(result.toDouble())
             }
             else -> Undefined
         }
     }
     private fun arrayValues(self: JsValue): MutableList<JsValue> = (self as? JsArray ?: unsupported("Unsupported array method receiver")).values
-    private fun stringReceiver(runtime: Runtime, self: JsValue): String = if (self === JsNull || self === Undefined) throw JsThrown("Invalid string method receiver") else runtime.stringValue(self)
+    private fun stringReceiver(runtime: Runtime, self: JsValue): String = if (self === JsNull || self === Undefined) throw JsThrown() else runtime.stringValue(self)
     private fun stringMethod(name: String): JsValue = when (name) {
         "split" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
@@ -721,14 +740,14 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         }
         "startsWith", "endsWith", "includes" -> Native { r, self, a ->
             val value = stringReceiver(r, self)
-            if (a.firstOrNull() is RegexValue) throw JsThrown("Regex argument")
+            if (a.firstOrNull() is RegexValue) throw JsThrown()
             val search = r.stringValue(a.getOrElse(0) { Undefined })
             if (name != "includes") r.tick(value.length)
             val pos = if (a.size < 2 || a[1] === Undefined) if (name == "endsWith") value.length else 0 else r.integer(a[1]).coerceIn(0, value.length)
             JsBoolean(when (name) { "startsWith" -> value.startsWith(search, pos); "endsWith" -> value.substring(0, pos).endsWith(search); else -> r.find(value, search, pos) >= 0 })
         }
         "replace" -> Native { r, self, a -> JsString(r.replace(self, a.getOrElse(0) { Undefined }, a.getOrElse(1) { Undefined })) }
-        "toString", "valueOf" -> Native { _, self, _ -> self as? JsString ?: throw JsThrown("Invalid string method receiver") }
+        "toString", "valueOf" -> Native { _, self, _ -> self as? JsString ?: throw JsThrown() }
         else -> Undefined
     }
     }
@@ -753,12 +772,20 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         "in" -> {
             if (right !is JsObject && right !is JsArray) {
                 if (isRuntimeObject(right)) unsupported("Unsupported right-hand side of in")
-                throw JsThrown("Invalid right-hand side of in")
+                throw JsThrown()
             }
             val key = stringValue(left); tick(key.length)
             JsBoolean(when (right) {
-                is JsObject -> right.fields.containsKey(key)
-                is JsArray -> index(key)?.let { it < right.values.size && right.values[it] !== Hole } ?: right.fields.containsKey(key)
+                is JsObject -> when {
+                    right.fields.containsKey(key) || key == "toString" || key == "valueOf" -> true
+                    right.builtin != null || key in unsupportedObjectProperties -> unsupported("Unsupported object property presence")
+                    else -> false
+                }
+                is JsArray -> when {
+                    key == "length" || right.fields.containsKey(key) || arrayMethods.containsKey(key) -> true
+                    key in unsupportedObjectProperties || key in unsupportedArrayProperties -> unsupported("Unsupported array property presence")
+                    else -> index(key)?.let { it < right.values.size && right.values[it] !== Hole } ?: false
+                }
             })
         }
         else -> unsupported("Unsupported operator '$op'")
@@ -837,13 +864,30 @@ private fun numericString(value: String): Double {
     val radix = when { s.startsWith("0x", true) -> 16; s.startsWith("0b", true) -> 2; s.startsWith("0o", true) -> 8; else -> 0 }
     if (radix != 0) {
         if (s.length == 2) return Double.NaN
-        var n = 0.0
+        val digitBits = when (radix) { 16 -> 4; 8 -> 3; else -> 1 }
+        var significand = 0L
+        var bits = 0
+        var guard = false
+        var sticky = false
         for (i in 2 until s.length) {
             val digit = when (val c = s[i]) { in '0'..'9' -> c - '0'; in 'a'..'f' -> c - 'a' + 10; in 'A'..'F' -> c - 'A' + 10; else -> return Double.NaN }
             if (digit >= radix) return Double.NaN
-            n = n * radix + digit
+            for (shift in digitBits - 1 downTo 0) {
+                val bit = (digit shr shift) and 1
+                if (bits == 0 && bit == 0) continue
+                bits++
+                when {
+                    bits <= 53 -> significand = (significand shl 1) or bit.toLong()
+                    bits == 54 -> guard = bit != 0
+                    bit != 0 -> sticky = true
+                }
+            }
         }
-        return n
+        if (bits <= 53) return significand.toDouble()
+        if (bits > 1024) return Double.POSITIVE_INFINITY
+        // Round the complete integer to nearest, ties to even, then scale by an exact power of two.
+        if (guard && (sticky || significand and 1L != 0L)) significand++
+        return significand.toDouble() * Double.fromBits((bits - 53 + 1023).toLong() shl 52)
     }
     if (!decimalNumber.matches(s)) return Double.NaN
     return s.toDoubleOrNull() ?: Double.NaN
