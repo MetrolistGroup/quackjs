@@ -2,14 +2,25 @@ package meow.nyx.quackjs
 
 internal fun unsupported(message: String): Nothing = throw UnsupportedPlayerException(message)
 internal fun jsWhitespace(c: Char): Boolean = if (c <= '\u007f') c == ' ' || c in '\u0009'..'\u000d' else c in '\u2000'..'\u200a' || c in "\u00a0\u1680\u2028\u2029\u202f\u205f\u3000\ufeff"
+internal fun jsLineTerminator(c: Char): Boolean = c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029'
 
-internal data class Token(val text: String, val kind: Int = 0, val offset: Int = 0)
+internal data class Token(val text: String, val kind: Int = 0, val offset: Int = 0, val lineBreakBefore: Boolean = false)
 internal val Token.context: String get() = if (kind == 0) text else "<value>"
 
 /** Lex only selected definitions. Strings and regexes stay opaque while slicing. */
 internal class Lexer(private val source: String, private var p: Int = 0) {
     val position: Int get() = p
-    private var templateDepth = 0
+    private data class Context(val closing: Int, val regexAfter: Boolean, val functionExpression: Boolean? = null, val switchBody: Boolean = false)
+    private val contexts = ArrayDeque<Context>()
+    private val questions = ArrayDeque<Int>()
+    private val caseHeaders = mutableSetOf<Int>()
+    private var started = false
+    private var statementStart = p == 0
+    private var previousTag = -1
+    private var pendingFunction: Boolean? = null
+    private var pendingBody: Boolean? = null
+    private var pendingSwitch = false
+    private var statementName = false
     fun tokens(): List<Token> {
         val out = mutableListOf<Token>()
         while (true) {
@@ -34,10 +45,13 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
         1 -> Lexer(source, offset + 1).quoted(source[offset], true)!!
         else -> source.substring(offset, end)
     }.also { cachedText = it }
-    val regexAfter: Boolean get() = kind == 0 && tag in regexTags
-    fun materialize(): Token = Token(text, kind, offset)
+    var regexAfter: Boolean = true
+        private set
+    var lineBreakBefore: Boolean = false
+        private set
+    fun materialize(): Token = Token(text, kind, offset, lineBreakBefore)
     fun next(previous: String? = null): Token {
-        scan(previous == null || previous in regexPrefix)
+        scan(if (started) regexAfter else previous == null || previous in regexPrefix)
         return materialize()
     }
     private fun finish(start: Int, tokenKind: Int) {
@@ -46,19 +60,93 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
         kind = tokenKind
         tag = if (kind == 0) ScanTags.code(source, start, p) else -kind - 1
         cachedText = null
+        updateContext()
+    }
+
+    private fun isText(value: String): Boolean = end - offset == value.length && source.regionMatches(offset, value, 0, value.length)
+
+    private fun updateContext() {
+        val wasStatementStart = statementStart
+        val body = pendingBody
+        val switchBody = pendingSwitch
+        pendingBody = null
+        pendingSwitch = false
+        val name = kind == 0 && offset < end && source[offset].let { it.isLetter() || it == '_' || it == '$' }
+        val memberName = name && (previousTag == ScanTags.DOT || previousTag == ScanTags.OPTIONAL)
+        if (tag != ScanTags.FUNCTION && tag != ScanTags.LPAREN && tag != ScanTags.STAR && !name) pendingFunction = null
+        when {
+            kind != 0 -> { regexAfter = false; statementStart = false }
+            memberName -> { regexAfter = false; statementStart = false }
+            tag == ScanTags.FUNCTION -> {
+                pendingFunction = !(statementStart || lineBreakBefore && !regexAfter)
+                regexAfter = false; statementStart = false
+            }
+            tag == ScanTags.LPAREN -> {
+                val control = previousTag in controlHeaders
+                contexts.addLast(Context(ScanTags.RPAREN, control, pendingFunction, previousTag == ScanTags.SWITCH))
+                pendingFunction = null
+                regexAfter = true; statementStart = false
+            }
+            tag == ScanTags.LBRACKET -> {
+                contexts.addLast(Context(ScanTags.RBRACKET, false))
+                regexAfter = true; statementStart = false
+            }
+            tag == ScanTags.LBRACE -> {
+                val block = body != null || statementStart || lineBreakBefore && !regexAfter || previousTag == ScanTags.ARROW ||
+                    previousTag == ScanTags.RETURN && lineBreakBefore
+                contexts.addLast(Context(ScanTags.RBRACE, if (body != null) !body else block && previousTag != ScanTags.ARROW, switchBody = switchBody))
+                regexAfter = true; statementStart = block
+            }
+            tag == ScanTags.RPAREN || tag == ScanTags.RBRACKET || tag == ScanTags.RBRACE -> {
+                val context = contexts.lastOrNull()?.takeIf { it.closing == tag }?.also { contexts.removeLast() }
+                caseHeaders.remove(contexts.size + 1)
+                while (questions.lastOrNull()?.let { it > contexts.size } == true) questions.removeLast()
+                regexAfter = context?.regexAfter ?: (tag == ScanTags.RBRACE)
+                pendingBody = context?.functionExpression
+                pendingSwitch = context?.switchBody == true && tag == ScanTags.RPAREN
+                statementStart = regexAfter
+            }
+            tag == ScanTags.SEMI || tag == ScanTags.ELSE || tag == ScanTags.CATCH || isText("do") || isText("try") || isText("finally") -> {
+                regexAfter = true; statementStart = true
+            }
+            contexts.lastOrNull()?.switchBody == true && (tag == ScanTags.CASE || isText("default")) -> {
+                caseHeaders.add(contexts.size)
+                regexAfter = true; statementStart = false
+            }
+            tag == ScanTags.QUESTION -> {
+                questions.addLast(contexts.size)
+                regexAfter = true; statementStart = false
+            }
+            tag == ScanTags.COLON -> {
+                val conditional = questions.lastOrNull() == contexts.size
+                if (conditional) questions.removeLast()
+                val caseHeader = !conditional && caseHeaders.remove(contexts.size)
+                regexAfter = true; statementStart = !conditional && (statementName || caseHeader)
+            }
+            else -> {
+                regexAfter = tag in regexTags || isText("in") || isText("instanceof")
+                statementStart = false
+            }
+        }
+        if (contexts.size > 1024) unsupported("Source nesting limit exceeded")
+        statementName = wasStatementStart && name
+        previousTag = if (memberName) ScanTags.IDENTIFIER else tag
+        started = true
     }
 
     /** Advance without allocating token text. All literal validation still runs. */
     fun scan(regexAllowed: Boolean = true) {
+        lineBreakBefore = false
         while (p < source.length) {
-            if (jsWhitespace(source[p])) { p++; continue }
+            if (jsWhitespace(source[p])) { if (jsLineTerminator(source[p])) lineBreakBefore = true; p++; continue }
             if (source.startsWith("//", p)) {
-                while (p < source.length && source[p] != '\n') p++
+                while (p < source.length && !jsLineTerminator(source[p])) p++
                 continue
             }
             if (source.startsWith("/*", p)) {
                 val end = source.indexOf("*/", p + 2)
                 if (end < 0) unsupported("Unclosed comment")
+                for (i in p + 2 until end) if (jsLineTerminator(source[i])) lineBreakBefore = true
                 p = end + 2; continue
             }
             break
@@ -67,38 +155,40 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
         if (p == source.length) return finish(p, -1)
         val c = source[p++]
         if (c == '`') {
-            if (++templateDepth > 64) unsupported("Template nesting limit exceeded")
-            try {
-                while (p < source.length) {
-                    val ch = source[p++]
-                    if (ch == '\\') { if (p < source.length) p++; continue }
-                    if (ch == '`') return finish(start, 4)
-                    if (ch == '$' && p < source.length && source[p] == '{') {
-                        p++
-                        var braces = 1
-                        var prev = true
-                        while (braces > 0) {
-                            scan(prev)
-                            if (kind == -1) unsupported("Unclosed template interpolation")
-                            if (kind == 0 && tag == '{'.code) braces++
-                            if (kind == 0 && tag == '}'.code) braces--
-                            prev = regexAfter
-                        }
-                    }
-                }
-                unsupported("Unclosed template literal")
-            } finally { templateDepth-- }
+            while (p < source.length) {
+                val ch = source[p++]
+                if (ch == '\\') { if (p < source.length) p++; continue }
+                if (ch == '`') return finish(start, 4)
+                if (ch == '$' && p < source.length && source[p] == '{') unsupported("Template interpolation is unsupported")
+            }
+            unsupported("Unclosed template literal")
         }
         if (c == '\'' || c == '"') {
             quoted(c, false)
             return finish(start, 1)
         }
+        if (c == '\\') unsupported("Escaped identifiers are unsupported")
         if (c.isLetter() || c == '_' || c == '$') {
             while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '_' || source[p] == '$')) p++
             return finish(start, 0)
         }
         if (c.isDigit() || c == '.' && p < source.length && source[p].isDigit()) {
-            while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '.' || (source[p] == '+' || source[p] == '-') && source[p - 1].lowercaseChar() == 'e')) p++
+            if (c == '0' && p < source.length && source[p] in "xXbBoO") {
+                p++
+                while (p < source.length && source[p].isLetterOrDigit()) p++
+            } else {
+                while (p < source.length && source[p].isDigit()) p++
+                if (c != '.' && p < source.length && source[p] == '.') {
+                    p++
+                    while (p < source.length && source[p].isDigit()) p++
+                }
+                if (p < source.length && source[p] in "eE") {
+                    p++
+                    if (p < source.length && source[p] in "+-") p++
+                    while (p < source.length && source[p].isDigit()) p++
+                }
+                while (p < source.length && source[p].isLetterOrDigit()) p++
+            }
             return finish(start, 2)
         }
         if (c == '/' && regexAllowed) {
@@ -112,7 +202,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
                     while (p < source.length && source[p].isLetter()) p++
                     return finish(start, 3)
                 }
-                if (ch == '\n' || ch == '\r') unsupported("Unclosed regex")
+                if (jsLineTerminator(ch)) unsupported("Unclosed regex")
             }
             unsupported("Unclosed regex")
         }
@@ -154,8 +244,18 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
     }
 
     companion object {
-        private val regexTags = intArrayOf(ScanTags.EQUAL, ScanTags.LPAREN, ScanTags.LBRACKET, ScanTags.COMMA, ScanTags.COLON, ScanTags.SEMI, ScanTags.RETURN, ScanTags.CASE, ScanTags.ELSE, ScanTags.BANG, ScanTags.AND, ScanTags.OR, ScanTags.QUESTION, ScanTags.LBRACE, ScanTags.RBRACE, ScanTags.PLUS, ScanTags.MINUS, ScanTags.STAR, ScanTags.CARET, ScanTags.AMP, ScanTags.PIPE, ScanTags.THROW)
-        private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
+        private val controlHeaders = intArrayOf(ScanTags.IF, ScanTags.WHILE, ScanTags.FOR, ScanTags.SWITCH, ScanTags.CATCH, ScanTags.WITH)
+        private val regexTags = intArrayOf(
+            ScanTags.EQUAL, ScanTags.COMMA, ScanTags.RETURN, ScanTags.CASE, ScanTags.BANG, ScanTags.AND, ScanTags.OR,
+            ScanTags.QUESTION, ScanTags.PLUS, ScanTags.MINUS, ScanTags.STAR, ScanTags.CARET, ScanTags.AMP, ScanTags.PIPE, ScanTags.THROW,
+            ScanTags.STRICT_EQUAL, ScanTags.STRICT_NOT_EQUAL, ScanTags.EQ, ScanTags.NE, '<'.code, '>'.code, ScanTags.LE, ScanTags.GE,
+            '%'.code, '/'.code, ScanTags.POW, ScanTags.SHL, ScanTags.SHR, ScanTags.USHR, ScanTags.NULLISH,
+            ScanTags.PLUS_ASSIGN, ScanTags.MINUS_ASSIGN, ScanTags.STAR_ASSIGN, ScanTags.SLASH_ASSIGN, ScanTags.MOD_ASSIGN,
+            ScanTags.AMP_ASSIGN, ScanTags.PIPE_ASSIGN, ScanTags.CARET_ASSIGN, ScanTags.SHL_ASSIGN, ScanTags.SHR_ASSIGN,
+            ScanTags.USHR_ASSIGN, ScanTags.POW_ASSIGN, ScanTags.AND_ASSIGN, ScanTags.OR_ASSIGN, ScanTags.NULL_ASSIGN,
+            ScanTags.ARROW, ScanTags.TYPEOF, ScanTags.VOID, ScanTags.DELETE, ScanTags.NEW, '~'.code,
+        )
+        private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "%", "/", "**", "<<", ">>", ">>>", "??", "typeof", "void", "delete", "new", "in", "instanceof", "~")
         private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...").groupBy { it[0] }
     }
 }
@@ -296,16 +396,7 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
         val token = take()
         val text = token.text
         if (token.kind == 1) return postfix(Lit(text))
-        if (token.kind == 2) {
-            if (text.length > 1 && text[0] == '0' && text[1].isDigit()) unsupported("Legacy octal number literal")
-            val n = when {
-                text.startsWith("0x", true) -> text.drop(2).toLongOrNull(16)?.toDouble()
-                text.startsWith("0b", true) -> text.drop(2).toLongOrNull(2)?.toDouble()
-                text.startsWith("0o", true) -> text.drop(2).toLongOrNull(8)?.toDouble()
-                else -> text.toDoubleOrNull()
-            } ?: unsupported("Unsupported number '$text'")
-            return postfix(Lit(n))
-        }
+        if (token.kind == 2) return postfix(Lit(numberLiteral(text)))
         if (token.kind == 3) return postfix(Lit(RegexValue(text)))
         val base: Expr = when (text) {
             "!", "~", "+", "-", "typeof", "void", "delete" -> return Unary(text, expression(14))
@@ -328,7 +419,9 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
             "{" -> {
                 val items = mutableListOf<Pair<String, Expr>>()
                 while (!accept("}")) {
-                    val key = take().text; expect(":"); items.add(key to expression(1))
+                    val keyToken = take()
+                    val key = if (keyToken.kind == 2) meow.nyx.quackjs.text(JsNumber(numberLiteral(keyToken.text))) else keyToken.text
+                    expect(":"); items.add(key to expression(1))
                     if (!accept(",")) { expect("}"); break }
                 }
                 ObjectExpr(items)
@@ -367,8 +460,8 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
             accept(".") -> Member(e, Lit(identifier()))
             accept("[") -> { val key = expression(); expect("]"); Member(e, key) }
             accept("(") -> Call(e, arguments())
-            accept("++") -> Update("++", e, false)
-            accept("--") -> Update("--", e, false)
+            !tokens[p].lineBreakBefore && accept("++") -> Update("++", e, false)
+            !tokens[p].lineBreakBefore && accept("--") -> Update("--", e, false)
             else -> return e
         }
     }
@@ -401,8 +494,11 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
             accept("var") -> vars().also { accept(";") }
             accept("let") || accept("const") -> unsupported("Block-scoped declarations are unsupported")
             accept("if") -> { val e = condition(); val yes = statement(); IfStmt(e, yes, if (accept("else")) statement() else null) }
-            accept("return") -> ReturnStmt(if (t == ";" || t == "}") null else expression()).also { accept(";") }
-            accept("throw") -> ThrowStmt(expression()).also { accept(";") }
+            accept("return") -> ReturnStmt(if (tokens[p].lineBreakBefore || tokens[p].kind == -1 || t == ";" || t == "}") null else expression()).also { accept(";") }
+            accept("throw") -> {
+                if (tokens[p].lineBreakBefore) unsupported("Line terminator after throw")
+                ThrowStmt(expression()).also { accept(";") }
+            }
             accept("while") -> Loop(null, condition(), null, statement())
             accept("do") -> { val body = statement(); expect("while"); Loop(null, condition(), null, body, true).also { accept(";") } }
             accept("for") -> {
@@ -416,8 +512,8 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
                 expect(";"); val test = if (t == ";") null else expression(); expect(";")
                 val update = if (t == ")") null else expression(); expect(")"); Loop(init, test, update, statement())
             }
-            accept("break") -> Jump(false, if (t != ";" && t != "}") identifier() else null).also { accept(";") }
-            accept("continue") -> Jump(true, if (t != ";" && t != "}") identifier() else null).also { accept(";") }
+            accept("break") -> Jump(false, if (!tokens[p].lineBreakBefore && tokens[p].kind != -1 && t != ";" && t != "}") identifier() else null).also { accept(";") }
+            accept("continue") -> Jump(true, if (!tokens[p].lineBreakBefore && tokens[p].kind != -1 && t != ";" && t != "}") identifier() else null).also { accept(";") }
             accept("try") -> {
                 val body = block(); var name: String? = null; var handler: Stmt? = null
                 if (accept("catch")) { expect("("); name = identifier(); expect(")"); handler = block() }
@@ -435,11 +531,21 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
                 }
                 SwitchStmt(expr, cases)
             }
+            accept("function") -> unsupported("Function declarations are unsupported")
             tokens.getOrNull(p + 1)?.text == ":" -> { val name = identifier(); expect(":"); Label(name, statement()) }
             else -> ExpressionStmt(expression()).also { accept(";") }
         }
     }
     companion object {
+        private fun numberLiteral(text: String): Double {
+            if (text.length > 1 && text[0] == '0' && text[1].isDigit()) unsupported("Legacy octal number literal")
+            return when {
+                text.startsWith("0x", true) -> text.drop(2).toLongOrNull(16)?.toDouble()
+                text.startsWith("0b", true) -> text.drop(2).toLongOrNull(2)?.toDouble()
+                text.startsWith("0o", true) -> text.drop(2).toLongOrNull(8)?.toDouble()
+                else -> text.toDoubleOrNull()
+            } ?: unsupported("Unsupported number '$text'")
+        }
         private val precedence = mapOf("," to 0, "=" to 1, "+=" to 1, "-=" to 1, "*=" to 1, "/=" to 1, "%=" to 1, "&=" to 1, "|=" to 1, "^=" to 1, "<<=" to 1, ">>=" to 1, ">>>=" to 1,
             "||" to 3, "??" to 3, "&&" to 4, "|" to 5, "^" to 6, "&" to 7, "==" to 8, "!=" to 8, "===" to 8, "!==" to 8, "<" to 9, ">" to 9, "<=" to 9, ">=" to 9, "in" to 9, "instanceof" to 9,
             "<<" to 10, ">>" to 10, ">>>" to 10, "+" to 11, "-" to 11, "*" to 12, "/" to 12, "%" to 12, "**" to 13)
