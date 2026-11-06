@@ -89,16 +89,19 @@ private fun sampleCold(player: BenchPlayer): PlayerProgram {
 }
 
 /** Times repeated calls on one program; compares complete outputs after the timer stops. */
-private fun sampleWarm(cases: List<Challenge>, repeats: Int, times: MutableList<Double>, allocated: MutableList<Long>, call: (String) -> String) {
-    val results = arrayOfNulls<String>(cases.size)
+internal fun sampleWarm(cases: List<Challenge>, repeats: Int, times: MutableList<Double>, allocated: MutableList<Long>, call: (String) -> String) {
+    val results = arrayOfNulls<String>(repeats * cases.size)
     val bytes = threads.currentThreadAllocatedBytes
     val start = System.nanoTime()
-    repeat(repeats) { for (i in cases.indices) results[i] = call(cases[i].input) }
+    repeat(repeats) { repetition -> for (i in cases.indices) results[repetition * cases.size + i] = call(cases[i].input) }
     val elapsed = System.nanoTime() - start
     val calls = repeats * cases.size
     allocated += (threads.currentThreadAllocatedBytes - bytes) / calls
     times += elapsed.toDouble() / calls
-    for (i in cases.indices) check(results[i] == cases[i].output) { "${cases[i].kind}/${cases[i].name} golden mismatch" }
+    for (i in results.indices) {
+        val case = cases[i % cases.size]
+        check(results[i] == case.output) { "${case.kind}/${case.name} golden mismatch" }
+    }
 }
 
 private fun measureRound(player: BenchPlayer, reverseKinds: Boolean) {

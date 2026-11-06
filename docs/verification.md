@@ -392,9 +392,9 @@ publications, target links, artifact hashes, stdlib-only dependencies and Java 1
 bytecode without JS/JNI payloads:
 
 ```sh
-./gradlew publishToMavenLocal
+./gradlew publishToMavenLocal -PVERSION_NAME=0.1.4
 python3 scripts/verify-publication.py \
-  "$HOME/.m2/repository/com/github/MetrolistGroup/quackjs" 0.1.0
+  "$HOME/.m2/repository/com/github/MetrolistGroup/quackjs" 0.1.4
 ```
 
 JitPack runs the checked-in `jitpack.yml` and uses its tag/commit as

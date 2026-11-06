@@ -64,14 +64,16 @@ public class PlayerProgram private constructor(
          */
         public fun compile(playerJs: String, hints: PlayerHints? = null): PlayerProgram {
             if (playerJs.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
-            val derived = hints ?: derive(playerJs)
-            val source = SourceIndex(playerJs, derived.nClass)
+            val source = SourceIndex(playerJs, hints?.nClass)
+            val derived = hints ?: source.derivedHints!!
             if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
-            val signature = Parser(Lexer(derived.signatureExpression).tokens(), derived.signatureExpression).completeExpression()
+            val signature = Parser(Lexer(derived.signatureExpression).tokens(), derived.signatureExpression, source.compilationBudget).completeExpression()
             validateSignatureExpression(signature)
-            val runtime = Runtime(source, recordDispatch = true)
             try {
-                val plan = discoverN(source, derived.nClass, runtime)
+                val plan = discoverN(source, derived.nClass, Runtime(source, recordDispatch = true, compilationBudget = source.compilationBudget))
+                val runtime = Runtime(source, recordDispatch = true, compilationBudget = source.compilationBudget)
+                // Publish only dependencies used by the selected plan, after discarded probes.
+                plan.execute(runtime, "KdrqFlzJXl9EcCwlmEy")
                 val result = runtime.expression(signature, mapOf("INPUT" to JsString("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")))
                 if (result !is JsString) unsupported("Signature transform did not return a string")
                 val parsed = runtime.definitions.toMap()
@@ -95,46 +97,6 @@ public class PlayerProgram private constructor(
             } catch (error: JsThrown) {
                 unsupported("Player initialization failed: ${if (error.value is JsString) error.value.value.take(160) else "JavaScript exception"}")
             }
-        }
-
-        private fun derive(source: String): PlayerHints {
-            data class Landmark(val signature: String, val nClass: String, val locations: List<Pair<Int, String>>)
-            val candidates = mutableListOf<Landmark>()
-            var from = 0
-            while (true) {
-                val alr = source.indexOf(".set(\"alr\",\"yes\")", from)
-                if (alr < 0) break
-                from = alr + 1
-                val beforeStart = (alr - 160).coerceAtLeast(0)
-                val before = source.substring(beforeStart, alr)
-                val after = source.substring(alr, (alr + 260).coerceAtMost(source.length))
-                val n = Regex("new\\s+g\\.([A-Za-z0-9_$]+)\\s*\\([^,()]+,\\s*!0\\s*\\)").findAll(before).lastOrNull() ?: continue
-                val sig = Regex("([A-Za-z0-9_$]+)\\((\\d+),(\\d+),\\s*[A-Za-z0-9_$]+\\(\\d+,\\d+,").find(after) ?: continue
-                if (candidates.size >= 1024) unsupported("Player landmark limit exceeded")
-                candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[1],
-                    listOf(alr to ".", beforeStart + n.range.first to "new", alr + sig.range.first to sig.groupValues[1])))
-            }
-            // A landmark inside a comment, string or template is never executable code.
-            val wanted = candidates.flatMap { it.locations }.toSet()
-            val byOffset = wanted.groupBy { it.first }
-            val actual = mutableSetOf<Pair<Int, String>>()
-            val lexer = Lexer(source)
-            var previous = true
-            var count = 0
-            val end = wanted.maxOfOrNull { it.first } ?: -1
-            while (end >= 0) {
-                lexer.scan(previous)
-                if (lexer.kind == -1 || lexer.offset > end) break
-                if (++count > 2_000_000) unsupported("Source token limit exceeded")
-                if (lexer.kind == 0) for (location in byOffset[lexer.offset].orEmpty()) {
-                    if (lexer.end - lexer.offset == location.second.length && source.regionMatches(lexer.offset, location.second, 0, location.second.length)) actual.add(location)
-                }
-                previous = lexer.regexAfter
-            }
-            val valid = candidates.filter { actual.containsAll(it.locations) }.map { it.signature to it.nClass }.toSet()
-            if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
-            val (signature, nClass) = valid.single()
-            return PlayerHints(signature, nClass, 0)
         }
 
         private fun validateSignatureExpression(expr: Expr) {
@@ -188,7 +150,8 @@ private fun makeRoot(runtime: Runtime, constructor: FunctionExpr, mapKey: String
 
 /** Follow only calls receiving the URL instance, then execute the n-table update in isolation. */
 private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPlan {
-    val constructor = source.classFunction(name)
+    val budget = runtime.compilationBudget
+    val constructor = source.classFunction(name, budget)
     val getter = source.method(name, "get", runtime)
     val setter = source.method(name, "set", runtime)
     val initial = makeRoot(runtime, constructor, null, "", setter)
@@ -245,15 +208,15 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             if (stmt !is Vars) break
             if (stmt.items.any { it.second != null && !constant(it.second!!) }) break
             for ((name, expr) in stmt.items) if (expr != null) {
-                val bound = substitute(expr, bindings, env)
+                val bound = substitute(expr, bindings, env, budget)
                 if (bound == null) bindings.remove(name)
-                else { validateDepth(bound); bindings[name] = bound }
+                else { validateDepth(bound, budget); bindings[name] = bound }
             }
             runtime.exec(stmt, env)
             prefix.add(stmt)
         }
         val rootNames = bindings.filterValues { it == RootArgument }.keys.toSet()
-        val dynamic = bindings.filterValues(::dependsOnRoot).keys.toMutableSet()
+        val dynamic = bindings.filterValues { dependsOnRoot(it, budget) }.keys.toMutableSet()
         fun rootArgument(expr: Expr): Boolean = when (expr) {
             is Id -> expr.name in rootNames
             is Conditional -> rootArgument(expr.yes) || rootArgument(expr.no)
@@ -264,12 +227,24 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             else -> false
         }
         var rootWrite = false
+        var discardedWrite = false
         var unresolvedRootCalls = 0
         val discovered = mutableListOf<Candidate>()
         // Invalidate bindings in order; a later write must not change an earlier call site.
         walk(candidate.function.body, runtime, env, dynamic, write = { target ->
-            if (target is Id) { bindings.remove(target.name); dynamic.add(target.name) }
-            else if (target is Member && substitute(target, bindings, env) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
+            if (target is Id) {
+                if (env.owner(target.name)?.frame == null) discardedWrite = true
+                bindings.remove(target.name); dynamic.add(target.name)
+            } else if (target is Member) {
+                var base: Expr = target
+                while (base is Member) base = base.target
+                val bound = substitute(base, bindings, env, budget)
+                // Dropping global writes or n-table writes can change a helper's input state.
+                if (bound != RootArgument && (bound !is Id || env.owner(bound.name)?.frame == null)) discardedWrite = true
+                val written = target.target.let { substitute(it, bindings, env, budget) }
+                if (written == Member(RootArgument, Lit(mapKey))) discardedWrite = true
+                if (substitute(target, bindings, env, budget) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
+            }
         }, prefix = prefix) { call, guards ->
             var target = call.fn
             var selfRoot = false
@@ -283,15 +258,15 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             if (rootTail) unresolvedRootCalls++
             if (target is Member && target.key == Lit("call") && target.target is Id && argExprs.isNotEmpty()) {
                 if (!constant(argExprs.first())) return@walk
-                val self = substitute(argExprs.first(), bindings, env) ?: return@walk
+                val self = substitute(argExprs.first(), bindings, env, budget) ?: return@walk
                 if (self != RootArgument && self != Lit(Undefined)) return@walk
                 selfRoot = self == RootArgument
                 argExprs = argExprs.drop(1); target = target.target
             }
-            if (target !is Id || call.construct) return@walk
+            if (target !is Id || call.construct || env.owner(target.name)?.frame != null || target.name in dynamic) return@walk
             if (!argExprs.all(::constant)) return@walk
-            val boundArgs = argExprs.map { substitute(it, bindings, env) ?: return@walk }
-            boundArgs.forEach(::validateDepth)
+            val boundArgs = argExprs.map { substitute(it, bindings, env, budget) ?: return@walk }
+            boundArgs.forEach { validateDepth(it, budget) }
             val values = try { nArguments(runtime, boundArgs, cleanRoot) } catch (_: JsThrown) { return@walk } catch (_: UnsupportedPlayerException) { return@walk }
             if (!selfRoot && values.none { it === cleanRoot }) {
                 if (rootTail && values.all { it is JsNumber || it is JsString || it is JsBoolean || it === Undefined || it === JsNull }) unresolvedRootCalls--
@@ -301,8 +276,8 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             val fn = try { runtime.resolve(target.name) } catch (_: UnsupportedPlayerException) { return@walk }
             if (fn !is JsFunction) return@walk
             for (guard in guards) {
-                val bound = substitute(guard, bindings, env)
-                if (bound != null) validateDepth(bound)
+                val bound = substitute(guard, bindings, env, budget)
+                if (bound != null) validateDepth(bound, budget)
                 if (bound == null || inputDependentGuard(bound, runtime, mapKey)) {
                     lastError = "Cannot discard input-dependent n control flow"
                     return@walk
@@ -313,7 +288,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             if (rootTail) unresolvedRootCalls--
         }
         // An unbound or guarded second root call may overwrite an earlier helper's result.
-        if (!rootWrite && unresolvedRootCalls == 0) pending.addAll(discovered)
+        if (!rootWrite && !discardedWrite && unresolvedRootCalls == 0) pending.addAll(discovered)
     }
     return selected?.second ?: unsupported("Cannot isolate n transform: $lastError")
 }
@@ -327,8 +302,10 @@ private fun constant(expr: Expr): Boolean = when (expr) {
     else -> false
 }
 
-private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr? {
-    fun child(e: Expr): Expr? = substitute(e, bindings, env)
+private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env, budget: CompilationBudget): Expr? {
+    budget.step()
+    if (expr !is Lit && expr !is Id) budget.reserveSyntax(1)
+    fun child(e: Expr): Expr? = substitute(e, bindings, env, budget)
     return when (expr) {
         is Lit -> expr
         is Id -> bindings[expr.name] ?: expr.takeIf { env.owner(expr.name)?.frame == null }
@@ -341,13 +318,16 @@ private fun substitute(expr: Expr, bindings: Map<String, Expr>, env: Env): Expr?
     }
 }
 
-private fun dependsOnRoot(expr: Expr): Boolean = when (expr) {
-    is Id -> expr == RootArgument
-    is Unary -> dependsOnRoot(expr.expr)
-    is Binary -> dependsOnRoot(expr.left) || dependsOnRoot(expr.right)
-    is Member -> dependsOnRoot(expr.target) || dependsOnRoot(expr.key)
-    is Conditional -> dependsOnRoot(expr.test) || dependsOnRoot(expr.yes) || dependsOnRoot(expr.no)
-    else -> false
+private fun dependsOnRoot(expr: Expr, budget: CompilationBudget): Boolean {
+    budget.step()
+    return when (expr) {
+        is Id -> expr == RootArgument
+        is Unary -> dependsOnRoot(expr.expr, budget)
+        is Binary -> dependsOnRoot(expr.left, budget) || dependsOnRoot(expr.right, budget)
+        is Member -> dependsOnRoot(expr.target, budget) || dependsOnRoot(expr.key, budget)
+        is Conditional -> dependsOnRoot(expr.test, budget) || dependsOnRoot(expr.yes, budget) || dependsOnRoot(expr.no, budget)
+        else -> false
+    }
 }
 
 private fun inputDependentGuard(expr: Expr, runtime: Runtime, mapKey: String): Boolean {
@@ -355,7 +335,7 @@ private fun inputDependentGuard(expr: Expr, runtime: Runtime, mapKey: String): B
         if (e == RootArgument) return emptyList()
         if (e !is Member) return null
         val parent = rootPath(e.target) ?: return null
-        if (!constant(e.key) || dependsOnRoot(e.key)) return null
+        if (!constant(e.key) || dependsOnRoot(e.key, runtime.compilationBudget)) return null
         val key = try { text(runtime.expression(e.key)) } catch (_: UnsupportedPlayerException) { return null } catch (_: JsThrown) { return null }
         return parent + key
     }

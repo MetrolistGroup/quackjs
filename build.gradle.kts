@@ -6,7 +6,7 @@ plugins {
     `maven-publish`
 }
 group = "com.github.MetrolistGroup.quackjs"
-version = providers.gradleProperty("VERSION_NAME").orElse("0.1.3").get()
+version = providers.gradleProperty("VERSION_NAME").orElse("0.1.4").get()
 kotlin {
     android {
         namespace = "meow.nyx.quackjs"
@@ -85,6 +85,7 @@ tasks.register<JavaExec>("playerBenchmark") {
     val testCompilation = kotlin.targets.getByName("jvm").compilations.getByName("test")
     classpath(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
     mainClass.set("meow.nyx.quackjs.verification.PlayerBenchmarkKt")
+    providers.gradleProperty("bench.qperf").orNull?.let { systemProperty("quackjs.bench.qperf", it) }
     systemProperty("quackjs.fixtures", layout.projectDirectory.dir("fixtures").asFile.absolutePath)
     jvmArgs("-Xms512m", "-Xmx2g")
     doFirst {

@@ -85,9 +85,9 @@ class NativeCallbackLane22Test {
             val target = JsArray(mutableListOf(JsString("a"), JsString("b")))
             runtime.invoke(runtime.get(target, "forEach"), target, listOf(callback))
         }
-        // Lookup + outer invocation + two visits + preparation + two callback invocations.
+        // Lookup, outer invocation, two visits, preparation and two callbacks binding three parameters each.
         val steps = runtime()
-        steps.tick(2_000_000 - 30)
+        steps.tick(2_000_000 - 36)
         invoke(steps)
         assertFailsWith<UnsupportedPlayerException> { steps.tick() }
 

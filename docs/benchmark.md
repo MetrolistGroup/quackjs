@@ -39,6 +39,33 @@ See [oracle methodology and corpus provenance](verification.md).
   harnesses do not measure process startup, concurrent throughput, retained memory,
   energy, live networking, Android hardware or Apple performance.
 
+## Cold indexing and deferred dependencies
+
+Run `playerBenchmark -Pbench.qperf=true` for hinted and hint-free cold preparation
+on the six pinned fixtures, a discarded discovery probe with a 65,000-element
+constant table, and an 86-character signature that reaches a 5,000-statement
+helper skipped by compilation. Sources and inputs are prepared before timing.
+Each workload discards five warmups and reports 11 sample medians, with output
+checks outside timing. Deferred calls use eight calls per sample. JVM thread
+allocation includes Kotlin allocations, not native memory or retained heap.
+
+Measured on 2026-11-06 with Temurin 21.0.13, Linux x86_64, 512 MiB initial and
+2 GiB maximum heap. Each control disables only the named fix; the candidate
+includes all five fixes. These are single-process allocation comparisons on a
+shared host. Elapsed times were noisy, so the indexing claims use allocated bytes.
+
+| Fix and workload | Control bytes/op | Candidate bytes/op |
+| --- | ---: | ---: |
+| 99, discarded probe | 27,994,776 | 25,581,088 |
+| 103, hint-free 4f38b487 | 81,805,768 | 71,665,760 |
+| 107, deferred signature helper | 4,213,752 | 1,640 |
+| 120, hinted eb27e5fd | 68,014,664 | 62,069,888 |
+| 121, hinted eb27e5fd | 68,086,608 | 62,069,888 |
+
+The deferred helper also fell from 1.63 ms to 0.058 ms per call. This synthetic
+helper is larger than a typical late dependency.
+No Android, Apple or concurrent-throughput performance claim follows.
+
 ## Faraday latest-200 cohort
 
 `faraday200Benchmark` measures the pinned players from [verification.md](verification.md),

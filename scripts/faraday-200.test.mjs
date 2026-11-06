@@ -86,7 +86,18 @@ test('deterministic vectors and the full-source oracle reject invalid n results 
     assert.equal(evaluate("return 'abcde_'").n.length, 15);
     for (const [body, error] of [
         ["return input", /n unchanged/], ["return null", /not a string/],
-        ["return undefined", /not a string/], ["throw Error('broken')", /broken/],
+        ["return undefined", /not a string/],
+        ["return new String('abcde_')", /not a string/],
+        ["return {toJSON(){return 'abcde_'}}", /not a string/], ["throw Error('broken')", /broken/],
         ["return 'enhanced_except_bad'", /n error sentinel/], ["return '&&&&&&'", /regular expression/],
     ]) assert.throws(() => evaluate(body), error);
+});
+
+
+test('full-source oracle rejects boxed and serializable signature results', () => {
+    for (const result of ["new String('abcde_')", "{toJSON(){return 'abcde_'}}"]) {
+        const code = `var _yt_player={};(function(g){function Ab(a,b,input){return ${result}};g.CD=function(){this.get=function(){return 'abcde_'}}})(_yt_player);`;
+        const player = { id: 'test', sha256: sha256(code), signatureExpression: 'Ab(1,2,INPUT)', nClass: 'CD' };
+        assert.throws(() => solve(player, challenges(), code, ''), /not a string/);
+    }
 });

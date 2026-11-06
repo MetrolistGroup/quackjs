@@ -14,6 +14,7 @@ private const val BATCH_REPEATS = 16
 /** Opt-in, one JVM, no network or disk I/O in measured regions. Fail closed on any parity mismatch. */
 fun main() {
     val players = PlayerFixtures.load()
+    if (System.getProperty("quackjs.bench.qperf") == "true") { qPerfBenchmarks(players); return }
     println("java=${System.getProperty("java.runtime.version")} vendor=${System.getProperty("java.vendor")}")
     println("os=${System.getProperty("os.name")} ${System.getProperty("os.version")} arch=${System.getProperty("os.arch")}")
     println("cpus=${Runtime.getRuntime().availableProcessors()} maxHeap=${Runtime.getRuntime().maxMemory()} jvmArgs=${ManagementFactory.getRuntimeMXBean().inputArguments}")

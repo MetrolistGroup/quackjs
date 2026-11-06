@@ -11,8 +11,9 @@ import meow.nyx.quackjs.PlayerHints
 import meow.nyx.quackjs.PlayerProgram
 
 /** Compare both compile modes with the Node goldens written by scripts/faraday-sweep.mjs. */
-fun main() {
-    val cache = Path.of(System.getProperty("quackjs.faraday.cache"))
+fun main() = runFaradaySweep(Path.of(System.getProperty("quackjs.faraday.cache")))
+
+internal fun runFaradaySweep(cache: Path) {
     val sweep = Json.parseToJsonElement(Files.readString(cache.resolve("sweep.json"))).jsonObject
     val inputs = sweep.getValue("inputs").jsonObject
     fun samples(kind: String) = inputs.getValue(kind).jsonArray.map { it.jsonObject.text("input") }
@@ -33,7 +34,8 @@ fun main() {
         val hints = PlayerHints(p.text("signatureExpression"), p.text("nClass"), p.getValue("signatureTimestamp").jsonPrimitive.int)
         runCatching { verify(PlayerProgram.compile(source, hints)) }.onFailure { failed += "$id hinted: ${it.message}" }
         runCatching { verify(PlayerProgram.compile(source)) }.onFailure {
-            if ("ambiguous" in it.message.orEmpty().lowercase()) ambiguous++ else failed += "$id hintFree: ${it.message}"
+            if ("ambiguous" in it.message.orEmpty().lowercase()) ambiguous++
+            failed += "$id hintFree: ${it.message}"
         }
     }
     failed.forEach(::println)

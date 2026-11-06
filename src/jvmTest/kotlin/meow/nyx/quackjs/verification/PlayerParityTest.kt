@@ -20,6 +20,10 @@ class PlayerParityTest {
         verify("55de7e60", discover = true)
     }
 
+    @Test fun hintFreeFixtureLandmarksKeepWorking() {
+        for (player in PlayerFixtures.load()) verify(player.id, discover = true)
+    }
+
     private fun verify(
         id: String,
         discover: Boolean = false,

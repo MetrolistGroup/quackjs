@@ -1,7 +1,13 @@
+@file:OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+
 package meow.nyx.quackjs
 
+import kotlin.concurrent.atomics.AtomicReference
+
 /** Lex once to index the player scope; parse and execute only selected dependencies. */
-internal class SourceIndex(val source: String, className: String) {
+internal class SourceIndex(val source: String, className: String? = null) {
+    internal val compilationBudget = CompilationBudget()
+    internal val derivedHints: PlayerHints?
     private class ScanBudget {
         private var tokens = 0
         private var units = 0
@@ -27,19 +33,36 @@ internal class SourceIndex(val source: String, className: String) {
     private data class Reference(val name: String, val projected: Boolean)
     private data class CallEffects(val receiver: String?, val predicate: String?, val reversal: String?, val arguments: References)
     private data class FunctionScope(val depth: Int, val parameters: Int, val name: String?)
+    private data class ClassScope(val depth: Int, val parameters: List<Int>, val bindings: List<String>, val functionScope: Boolean)
+    private fun classScope(depth: Int, scopes: ArrayDeque<FunctionScope>): ClassScope =
+        ClassScope(depth, scopes.map { it.parameters }, scopes.mapNotNull { it.name }, scopes.lastOrNull()?.depth == depth)
+    private fun discardNestedTargets(found: MutableList<Assignment>, nestedWrites: MutableList<Pair<String, Int>>, calls: MutableList<CallSite>, depth: Int, name: String) {
+        calls.removeAll { it.braces > depth }
+        found.removeAll {
+            if (it.braces > depth && !classTarget(it.lhs, name)) {
+                nestedWrites.add(it.lhs.first().text to it.braces)
+                true
+            } else false
+        }
+    }
     private enum class DefinitionKind { PRIMITIVE, ARRAY, UNKNOWN }
     private var assignments: List<Assignment>
+    private var members: List<Assignment>
+    private data class ParsedDefinitions(val entries: Map<String, Expr>, val tokens: Int)
+    private var parsedDefinitions: AtomicReference<ParsedDefinitions>? = null
     private val definitions: Map<String, Int>
     private val timestamps: Set<Int>
     val signatureTimestamp: Int? get() = if (timestamps.size <= 1) timestamps.singleOrNull() else unsupported("Conflicting signature timestamps")
 
     init {
         if (source.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
-        if (className.length > 128 || !identifier(className)) unsupported("Invalid n class hint")
+        if (className != null && (className.length > 128 || !identifier(className))) unsupported("Invalid n class hint")
+        val landmarks = if (className == null) PlayerLandmarks(source) else null
         val lexer = Lexer(source)
         val scans = ScanBudget()
         val recent = ScanWindow(source)
         val found = mutableListOf<Assignment>()
+        val nestedWrites = mutableListOf<Pair<String, Int>>()
         val calls = mutableListOf<CallSite>()
         val updates = mutableListOf<Pair<String, Int>>()
         val stamps = mutableSetOf<Int>()
@@ -48,15 +71,14 @@ internal class SourceIndex(val source: String, className: String) {
         var parens = 0
         var count = 0
         var callCount = 0
+        var assignmentCount = 0
         var previous = true
         var prefixUpdate = false
         val headers = mutableMapOf<Int, Pair<Int, String?>>()
         var bodyParameters: Pair<Int, String?>? = null
         val activeScopes = ArrayDeque<FunctionScope>()
         var classDepth = Int.MAX_VALUE
-        var classParameters = emptyList<Int>()
-        var classBindings = emptyList<String>()
-        var classFunctionScope = false
+        val classScopes = mutableMapOf<String, ClassScope>()
         fun recordUpdate(name: String) {
             if (updates.size >= 100_000) unsupported("Source mutation limit exceeded")
             updates.add(name to braces)
@@ -65,6 +87,13 @@ internal class SourceIndex(val source: String, className: String) {
             lexer.scan(previous)
             if (lexer.kind == -1) break
             if (++count > 2_000_000) unsupported("Source token limit exceeded")
+            landmarks?.observe(lexer)
+            if (className == null && classDepth == Int.MAX_VALUE) landmarks?.selectedClass?.let { name ->
+                classScopes[name]?.let { scope ->
+                    classDepth = scope.depth
+                    discardNestedTargets(found, nestedWrites, calls, classDepth, name)
+                }
+            }
             val tag = lexer.tag
             bodyParameters?.let { parameters ->
                 if (tag == ScanTags.LBRACE) {
@@ -91,16 +120,18 @@ internal class SourceIndex(val source: String, className: String) {
                 val end = targetEnd(recent)
                 val start = assignmentTargetStart(recent, end)
                 if (start >= 0) {
-                    if (found.size >= 100_000) unsupported("Source definition limit exceeded")
-                    val lhs = recent.retain(start, end + 1)
-                    found.add(Assignment(lhs, lexer.offset + 1, braces, parens))
-                    if (classTarget(lhs, className) && braces < classDepth) {
-                        classDepth = braces
-                        calls.removeAll { it.braces > classDepth }
-                        classParameters = activeScopes.map { it.parameters }
-                        classBindings = activeScopes.mapNotNull { it.name }
-                        classFunctionScope = activeScopes.lastOrNull()?.depth == braces
+                    if (assignmentCount++ >= 100_000) unsupported("Source definition limit exceeded")
+                    val isClass = end - start == 2 && recent.isText(start, "g") && recent.isText(start + 1, ".") && (if (className != null) recent.isText(end, className) else recent.text(end) in landmarks!!.classNames)
+                    if (isClass) {
+                        val name = recent.text(end)
+                        if (braces <= (classScopes[name]?.depth ?: Int.MAX_VALUE)) classScopes[name] = classScope(braces, activeScopes)
                     }
+                    if (isClass && braces < classDepth && (className != null || recent.text(end) == landmarks?.selectedClass)) {
+                        classDepth = braces
+                        discardNestedTargets(found, nestedWrites, calls, classDepth, recent.text(end))
+                    }
+                    if (braces <= classDepth || isClass) found.add(Assignment(recent.retain(start, end + 1), lexer.offset + 1, braces, parens))
+                    else nestedWrites.add(recent.text(start) to braces)
                 }
             }
             if (tag == ScanTags.LPAREN) {
@@ -131,13 +162,18 @@ internal class SourceIndex(val source: String, className: String) {
             previous = lexer.regexAfter
         }
         if (braces != 0 || parens != 0) unsupported("Unbalanced player source")
-        val classes = found.filter { classTarget(it.lhs, className) }
-        val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$className'")
+        derivedHints = landmarks?.hints()
+        val indexedClass = className ?: derivedHints!!.nClass
+        if (indexedClass.length > 128 || !identifier(indexedClass)) unsupported("Invalid n class hint")
+        val classes = found.filter { classTarget(it.lhs, indexedClass) }
+        val depth = classes.minOfOrNull { it.braces } ?: unsupported("Missing n class '$indexedClass'")
         val classAssignments = classes.filter { it.braces == depth }
-        if (classAssignments.size != 1) unsupported("Ambiguous n class '$className'")
+        if (classAssignments.size != 1) unsupported("Ambiguous n class '$indexedClass'")
         val rootBraces = classAssignments.single().braces
         val rootParens = classAssignments.single().parens
+        val scope = classScopes.getValue(indexedClass)
         assignments = found.filter { it.braces == rootBraces && it.parens == rootParens }
+        members = assignments.filter { it.lhs.size > 3 && it.lhs[0].text == "g" && it.lhs[1].text == "." && it.lhs[2].text == indexedClass }
         val names = assignments.filter { it.lhs.size == 1 }.groupBy { it.lhs.single().text }
         val writes = found.filter { it.braces == rootBraces }
         val writeCounts = writes.filter { it.lhs.size == 1 }.groupingBy { it.lhs.single().text }.eachCount()
@@ -171,9 +207,9 @@ internal class SourceIndex(val source: String, className: String) {
         }
         val arrayQueue = ArrayDeque(arrays)
         while (arrayQueue.isNotEmpty()) for (alias in aliases[arrayQueue.removeFirst()].orEmpty()) if (arrays.add(alias)) arrayQueue.addLast(alias)
-        val parameters = classParameters.flatMap { argumentReferences(it, scans).let { it.names + it.lengths } }.toSet()
-        val unknownScope = rootBraces > 0 && !classFunctionScope
-        val shadowed = names.keys + parameters + classBindings + if (unknownScope) readOnlyPredicates.keys else emptySet()
+        val parameters = scopeParameters(scope, scans)
+        val unknownScope = rootBraces > 0 && !scope.functionScope
+        val shadowed = names.keys + parameters + scope.bindings + if (unknownScope) readOnlyPredicates.keys else emptySet()
         val builtins = mutableMapOf<String, String>()
         for (root in readOnlyPredicates.keys) if (root !in shadowed) {
             val queue = ArrayDeque(listOf(root))
@@ -245,7 +281,7 @@ internal class SourceIndex(val source: String, className: String) {
             return own
         }
         val builtinWrites = found.filter { it.lhs.size > 1 || it.braces != rootBraces || (writeCounts[it.lhs.first().text] ?: 0) > 1 }
-        val blocked = (builtinWrites.mapNotNull { builtins[it.lhs.first().text] } + updates.mapNotNull { builtins[it.first] }).toMutableSet()
+        val blocked = (builtinWrites.mapNotNull { builtins[it.lhs.first().text] } + nestedWrites.mapNotNull { builtins[it.first] } + updates.mapNotNull { builtins[it.first] }).toMutableSet()
         var affected = mutations(blocked)
         while (true) {
             val changed = readOnlyPredicates.keys.filter { it in affected && it !in blocked }
@@ -262,10 +298,14 @@ internal class SourceIndex(val source: String, className: String) {
             }
         }
         timestamps = stamps
+        landmarks?.requireGlobalCalls(this)
     }
 
+    private fun scopeParameters(scope: ClassScope, scans: ScanBudget): Set<String> =
+        scope.parameters.flatMap { argumentReferences(it, scans).let { it.names + it.lengths } }.toSet()
+
     private fun targetExpression(tokens: List<Token>): Expr? =
-        try { Parser(tokens + Token("<eof>", -1), source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+        try { Parser(tokens + Token("<eof>", -1), source, compilationBudget).completeExpression() } catch (_: UnsupportedPlayerException) { null }
 
     /** Prove initializer value kinds without executing unrelated player code. */
     private fun definitionKind(name: String, known: MutableMap<String, DefinitionKind>, scans: ScanBudget, nativeSplit: Boolean, names: Map<String, List<Assignment>>, writeCounts: Map<String, Int>, resolving: MutableSet<String> = mutableSetOf()): DefinitionKind {
@@ -297,7 +337,7 @@ internal class SourceIndex(val source: String, className: String) {
                 if (first.tag == ScanTags.FUNCTION || first.tag == ScanTags.LBRACE) DefinitionKind.UNKNOWN
                 else {
                     val tokens = slice(offset, scans)
-                    val expr = try { Parser(tokens, source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+                    val expr = try { Parser(tokens, source, compilationBudget).completeExpression() } catch (_: UnsupportedPlayerException) { null }
                     expr?.let(::kind) ?: DefinitionKind.UNKNOWN
                 }
             }
@@ -405,18 +445,54 @@ internal class SourceIndex(val source: String, className: String) {
     /** Called before publication, after class and method discovery has finished. */
     fun releaseCompileState() {
         assignments = emptyList()
+        members = emptyList()
+        if (parsedDefinitions == null) parsedDefinitions = AtomicReference(ParsedDefinitions(emptyMap(), 0))
     }
 
     fun hasDefinition(name: String): Boolean = definitions.containsKey(name)
 
-    fun definition(name: String): Expr {
+    fun requireGlobalCall(offset: Int, name: String) {
+        val entry = assignments.filter { it.offset <= offset }.maxByOrNull { it.offset }
+            ?: unsupported("Cannot establish signature callee binding")
+        val tokens = slice(entry.offset)
+        if (tokens.last().offset <= offset) unsupported("Cannot establish signature callee binding")
+        for (token in tokens) {
+            if (token.offset >= offset) break
+            if (token.kind != 0 || token.text != "function") continue
+            val enclosing = slice(token.offset)
+            if (enclosing.last().offset <= offset) continue
+            val fn = Parser(enclosing, source, compilationBudget).completeExpression() as? FunctionExpr
+                ?: unsupported("Cannot establish signature callee binding")
+            if (name in fn.slots) unsupported("Shadowed signature callee")
+            val pending = ArrayDeque<SyntaxNode>()
+            pending.add(fn.body)
+            while (pending.isNotEmpty()) {
+                val node = pending.removeLast()
+                if (node is TryStmt && node.catchName == name) unsupported("Shadowed signature callee")
+                if (node !is FunctionExpr) syntaxChildren(node) { pending.add(it) }
+            }
+        }
+    }
+
+    fun definition(name: String, budget: CompilationBudget = CompilationBudget()): Expr {
+        val cache = parsedDefinitions
+        cache?.load()?.entries?.get(name)?.let { return it }
         val offset = definitions[name] ?: unsupported("Missing dependency '$name'")
         if (offset == AMBIGUOUS) unsupported("Ambiguous dependency '$name'")
         if (offset == MUTATED) unsupported("Externally mutated dependency '$name'")
-        return parseAt(offset)
+        val tokens = slice(offset)
+        val expr = Parser(tokens, source, budget).completeExpression()
+        if (cache != null) while (true) {
+            val previous = cache.load()
+            previous.entries[name]?.let { return it }
+            // Bound both the number and total token size of deferred definitions.
+            if (previous.entries.size >= 512 || tokens.size > 500_000 - previous.tokens) break
+            if (cache.compareAndSet(previous, ParsedDefinitions(previous.entries + (name to expr), previous.tokens + tokens.size))) break
+        }
+        return expr
     }
 
-    fun parseAt(offset: Int): Expr = Parser(slice(offset), source).completeExpression()
+    fun parseAt(offset: Int, budget: CompilationBudget = CompilationBudget()): Expr = Parser(slice(offset), source, budget).completeExpression()
 
     private fun slice(offset: Int, scans: ScanBudget? = null): List<Token> {
         val lexer = Lexer(source, offset)
@@ -438,22 +514,21 @@ internal class SourceIndex(val source: String, className: String) {
         }
     }
 
-    fun classFunction(name: String): FunctionExpr {
+    fun classFunction(name: String, budget: CompilationBudget = CompilationBudget()): FunctionExpr {
         val entry = assignments.singleOrNull { classTarget(it.lhs, name) }
             ?: unsupported("Missing or ambiguous n class '$name'")
-        return parseAt(entry.offset) as? FunctionExpr ?: unsupported("Unsupported n class")
+        return parseAt(entry.offset, budget) as? FunctionExpr ?: unsupported("Unsupported n class")
     }
 
     fun method(name: String, methodName: String, runtime: Runtime): FunctionExpr {
         val methods = mutableListOf<FunctionExpr>()
-        for (entry in assignments) {
-            if (entry.lhs.take(3).map(Token::text) != listOf("g", ".", name) || entry.lhs.size == 3) continue
-            val target = Parser(entry.lhs + Token("<eof>", -1), source).completeExpression() as? Member ?: continue
+        for (entry in members) {
+            val target = Parser(entry.lhs + Token("<eof>", -1), source, runtime.compilationBudget).completeExpression() as? Member ?: continue
             val parent = target.target as? Member ?: continue
             val root = parent.target as? Member ?: continue
             if (root.target != Id("g") || root.key != Lit(name)) continue
             if (runtime.expression(parent.key) == JsString("prototype") && runtime.expression(target.key) == JsString(methodName)) {
-                methods.add(parseAt(entry.offset) as? FunctionExpr ?: unsupported("Invalid n method"))
+                methods.add(parseAt(entry.offset, runtime.compilationBudget) as? FunctionExpr ?: unsupported("Invalid n method"))
             }
         }
         if (methods.size != 1) unsupported("Missing or ambiguous n $methodName method for '$name'")

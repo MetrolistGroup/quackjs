@@ -1,7 +1,7 @@
 package meow.nyx.quackjs
 
 internal fun Runtime.replace(receiver: JsValue, searchValue: JsValue, replacement: JsValue): String {
-    if (receiver === JsNull || receiver === Undefined) throw JsThrown("Invalid string method receiver")
+    if (receiver === JsNull || receiver === Undefined) throw JsThrown()
     val value = replacementString(receiver)
     val regex = if (searchValue is RegexValue) BoundedRegex(this, searchValue.source) else null
     val search = if (regex == null) replacementString(searchValue) else null

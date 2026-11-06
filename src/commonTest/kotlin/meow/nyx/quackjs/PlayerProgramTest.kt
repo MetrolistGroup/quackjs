@@ -31,6 +31,24 @@ class PlayerProgramTest {
         assertEquals("\ude00\ud83d\u2603", p.transformN("\u2603\ud83d\ude00"))
     }
 
+    @Test fun semanticGuardsKeepSignatureAndNTransformBranchesCorrect() {
+        for (body in listOf(
+            "try{null.p}catch(e){return e.name==='TypeError'?x.slice(1):x.split('').reverse().join('')}",
+            "return ('length' in x.split(''))?x.slice(1):x.split('').reverse().join('');",
+            "var a=['a'];var i=a.indexOf('b',{valueOf:function(){a.push('b');return 0}});return i===-1?x.slice(1):x;",
+            "var a=[1,2];var b=a.slice(0,{valueOf:function(){a.length=0;return 2}});return b.length===2&&!(0 in b)?x.slice(1):x;",
+            "var a=[1,2,3];a.splice(0,{valueOf:function(){a.length=0;return 1}});return a.length===2&&!(0 in a)?x.slice(1):x;",
+            "return Number('0x200000000000011')%64===32?x.slice(1):x;",
+            "return (Number('0x1000000000000081')>>>0)===256?x.slice(1):x;",
+        )) {
+            val program = compile(body, update = "o.set('n',sig(o.V.n));")
+            repeat(2) {
+                assertEquals("bc", program.decipherSignature("abc"), body)
+                assertEquals("bc", program.transformN("abc"), body)
+            }
+        }
+    }
+
     @Test fun cachedInitializersKeepLiveAliasesClosuresAndNestedStateIndependent() {
         val p = compile("state.nested.a.push(x);return alias.nested.a.length+':'+reader();", extra = """
             var state={nested:{a:[]}};
@@ -65,6 +83,66 @@ class PlayerProgramTest {
         assertEquals(20724, p.signatureTimestamp)
         assertEquals("cba", p.decipherSignature("abc"))
         assertNull(PlayerProgram.compile((fake + js).replace("signatureTimestamp:20724", "other:20724")).signatureTimestamp)
+    }
+
+    @Test fun nIsolationRejectsDiscardedGlobalWrites() {
+        val extra = "var state={tag:'a'};var rootN=function(o){o.set('n',state.tag+o.V.n.split('').reverse().join(''))};"
+        for (write in listOf("state.tag='b'", "state={tag:'b'}", "var alias=state;alias.tag='b'")) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$write;rootN(this);this.raw.toUpperCase();return this.V[k];")
+            assertFailsWith<UnsupportedPlayerException>(write) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+        }
+    }
+
+    @Test fun nIsolationRejectsDiscardedRootWrites() {
+        val extra = "var rootN=function(o){o.set('n',o.V.n+o.V.p)};"
+        val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "this.V.p='!';rootN(this);this.raw.toUpperCase();return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+    }
+
+    @Test fun nIsolationRejectsShadowedGlobalHelpers() {
+        val extra = "var rootN=function(o){o.set('n','wrong:'+o.V.n)};"
+        val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var rootN=function(o){o.set('n',o.V.n.split('').reverse().join(''))};rootN(this);this.raw.match('x');return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+    }
+
+    private fun landmark(body: String, extra: String = ""): String = source(extra = extra) + """
+        var decode=function(a,b,x){return x};
+        var sig2=function(a,b,x){return sig(x)};
+        var landmark=function(M,Q,X){$body};
+    """
+
+    @Test fun nLandmarkUsesTheAlrReceiverConstructor() {
+        val js = landmark("M=new g.C(M,!0);Q=new g.D(Q,!0);M.set(\"alr\",\"yes\");X=sig2(11,3932,decode(3,673,X));", """
+            g.D=function(raw,enabled){this.raw=raw;this.V={}};
+            g.D.prototype.set=function(k,v){this.V[k]=v};
+            g.D.prototype.get=function(k){this.set('n','d'+this.V.n);return this.V[k]};
+        """)
+        assertEquals("cba", PlayerProgram.compile(js).transformN("abc"))
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js.replace("M.set(\"alr\"", "other.set(\"alr\"")) }
+    }
+
+    @Test fun signatureLandmarksRejectDistinctExecutableMatches() {
+        val js = landmark("M=new g.C(M,!0);M.set(\"alr\",\"yes\");audit(1,2,decode(3,4,X));X=sig2(11,3932,decode(3,673,X));", "var audit=function(a,b,x){return x+'!'};")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js) }
+    }
+
+    @Test fun signatureLandmarksCheckEveryMatchingCallBinding() {
+        val prefix = "M=new g.C(M,!0);M.set(\"alr\",\"yes\");"
+        val first = landmark(prefix + "X=sig2(11,3932,decode(3,673,X));")
+        val second = "var another=function(M,X,sig2){" + prefix + "X=sig2(11,3932,decode(3,673,X));};"
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(first + second) }
+    }
+
+    @Test fun signatureLandmarksRejectMemberAndShadowedCallees() {
+        val prefix = "M=new g.C(M,!0);M.set(\"alr\",\"yes\");"
+        val member = landmark(prefix + "X=holder.sig2(11,3932,decode(3,673,X));", "var holder={sig2:function(a,b,x){return x+'!'}};")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(member) }
+        for (body in listOf(
+            "var sig2=function(a,b,x){return x+'!'};X=sig2(11,3932,decode(3,673,X));",
+            "X=sig2(11,3932,decode(3,673,X));var sig2;",
+        )) assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(landmark(prefix + body)) }
+        val parameter = landmark(prefix + "X=sig2(11,3932,decode(3,673,X));").replace("function(M,Q,X)", "function(M,sig2,X)")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(parameter) }
     }
 
     @Test fun onlyLexicalPlayerScopeDefinitionsAreUsed() {
@@ -395,7 +473,7 @@ class PlayerProgramTest {
 
     @Test fun functionFramesConsumeTheAllocationBudget() {
         val locals = (0 until 10_000).joinToString(",") { "v$it" }
-        val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){var $locals;};")
+        val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){if(false){var $locals;}};")
         val error = assertFailsWith<UnsupportedPlayerException> { p.decipherSignature("evil") }
         assertTrue(error.message!!.contains("Allocation limit"))
     }

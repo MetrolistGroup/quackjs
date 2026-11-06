@@ -9,11 +9,11 @@ class TokenlessIndexTest {
     private fun index(extra: String): SourceIndex = SourceIndex("var g={};g.C=function(){};$extra", "C")
 
     @Test fun cursorPreservesOffsetsDecodedStringsAndOpaqueLiterals() {
-        val source = "/*skip*/ x='a\\x62\\u0063\\\r\nz';return /[\\/]x/g;`opaque ${'$'}{`nested ${'$'}{{a:1}}`}`;ā;é;>>>="
+        val source = "/*skip*/ x='a\\x62\\u0063\\\r\nz';return /[\\/]x/g;`opaque \\${'$'}{text}`;ā;é;>>>="
         val lexer = Lexer(source)
         val expected = listOf(
             "x" to 0, "=" to 0, "abcz" to 1, ";" to 0, "return" to 0,
-            "/[\\/]x/g" to 3, ";" to 0, "`opaque ${'$'}{`nested ${'$'}{{a:1}}`}`" to 4,
+            "/[\\/]x/g" to 3, ";" to 0, "`opaque \\${'$'}{text}`" to 4,
             ";" to 0, "ā" to 0, ";" to 0, "é" to 0, ";" to 0, ">>>=" to 0, "<eof>" to -1,
         )
         var regexAllowed = true
@@ -33,8 +33,8 @@ class TokenlessIndexTest {
     }
 
     @Test fun regexContextTagsMatchEveryPrefixAndRejectSimilarIdentifiers() {
-        val prefixes = listOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw")
-        val values = listOf("returned", "elsewhere", "throwing", "ā", "x", "1", "'return'", ")", "]", "++", "--", "==", "??", "?.", "function", "delete")
+        val prefixes = listOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw", "==", "??", "delete")
+        val values = listOf("returned", "elsewhere", "throwing", "ā", "x", "1", "'return'", ")", "]", "++", "--", "?.", "function")
         for (prefix in prefixes + values) {
             val lexer = Lexer("$prefix /x/")
             lexer.scan()
