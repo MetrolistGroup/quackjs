@@ -32,7 +32,7 @@ internal class PlayerLandmarks(private val source: String) {
                 val constructorOffset = beforeStart + n.range.first
                 val receiverOffset = beforeStart + receiver.range.first
                 candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[3], sigOffset,
-                    listOf(alr to ".", constructorOffset to receiver.value, beforeStart + n.groups[2]!!.range.first to "new", receiverOffset to receiver.value, sigOffset to sig.groupValues[1]),
+                    listOf(alr to ".", constructorOffset to receiver.value, beforeStart + n.range.first + n.value.indexOf("new", n.groupValues[1].length) to "new", receiverOffset to receiver.value, sigOffset to sig.groupValues[1]),
                     setOf(constructorOffset, receiverOffset, sigOffset)))
             }
         }
