@@ -176,7 +176,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     fun resolve(name: String): JsValue {
         global.values[name]?.let { return it }
-        val builtin = builtin(name)
+        val builtin = if (name !in parsed && name !in definitions && !source.hasDefinition(name)) builtin(name) else null
         if (builtin != null) {
             val value = if (builtin is Native) builtin.named(name) else builtin
             global.values[name] = value
@@ -193,7 +193,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     }
     fun eval(expr: Expr, env: Env): JsValue {
         tick()
-        if (expr is Lit) return expr.value
+        if (expr is Lit) return if (expr.value is RegexValue) { allocate(1); RegexValue(expr.value.source) } else expr.value
         if (expr is Id) return if (expr.slot >= 0) env.frame!!.slots[expr.slot] else if (expr.free && env.frame?.parent === global) globalValue(expr) else { val owner = env.owner(expr.name); if (owner != null) owner[expr.name]!! else resolve(expr.name) }
         return evalComplex(expr, env)
     }
@@ -424,7 +424,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                 slots[expr.slot] = result
                 result
             } else {
-                val owner = env.owner(expr.name) ?: unsupported("Assignment to undeclared '${expr.name}'")
+                val owner = env.owner(expr.name) ?: if (expr.name in parsed || source.hasDefinition(expr.name)) {
+                    resolve(expr.name)
+                    global
+                } else unsupported("Assignment to undeclared '${expr.name}'")
                 val result = value(if (read) owner[expr.name]!! else Undefined)
                 owner[expr.name] = result
                 result

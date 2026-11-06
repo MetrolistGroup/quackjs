@@ -330,12 +330,12 @@ internal class FunctionExpr(
         parameterSlots = IntArray(params.size) { slots.getValue(params[it]) }
         thisSlot = slots.getValue("this")
         argumentsSlot = slots.getValue("arguments")
-        nameSlot = name?.let { slots.getValue(it) } ?: -1
+        nameSlot = name?.takeIf { it !in params && it !in names && it != "arguments" }?.let { slots.getValue(it) } ?: -1
         for (id in ids) if (id.name !in catches) {
             id.slot = slots[id.name] ?: -1
             id.free = id.slot < 0
         }
-        usesArguments = arguments
+        usesArguments = arguments && "arguments" !in params
         hasClosures = closures
         hotCharacterPlan = HotCharacterPlan.compile(this)
     }
