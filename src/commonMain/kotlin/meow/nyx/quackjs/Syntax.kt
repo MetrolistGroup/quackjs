@@ -10,15 +10,16 @@ internal val Token.context: String get() = if (kind == 0) text else "<value>"
 /** Lex only selected definitions. Strings and regexes stay opaque while slicing. */
 internal class Lexer(private val source: String, private var p: Int = 0) {
     val position: Int get() = p
-    private data class Context(val closing: Int, val regexAfter: Boolean, val functionExpression: Boolean? = null, val switchBody: Boolean = false)
-    private val contexts = ArrayDeque<Context>()
-    private val questions = ArrayDeque<Int>()
-    private val caseHeaders = mutableSetOf<Int>()
+    // Case headers share their bracket frame and disappear when it is popped.
+    private var contexts = emptyStack
+    private var contextSize = 0
+    private var questions = emptyStack
+    private var questionSize = 0
     private var started = false
     private var statementStart = p == 0
     private var previousTag = -1
-    private var pendingFunction: Boolean? = null
-    private var pendingBody: Boolean? = null
+    private var pendingFunction = 0
+    private var pendingBody = 0
     private var pendingSwitch = false
     private var statementName = false
     fun tokens(): List<Token> {
@@ -42,7 +43,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
     private var cachedText: String? = null
     val text: String get() = cachedText ?: when (kind) {
         -1 -> "<eof>"
-        1 -> Lexer(source, offset + 1).quoted(source[offset], true)!!
+        1 -> decodedString()
         else -> source.substring(offset, end)
     }.also { cachedText = it }
     var regexAfter: Boolean = true
@@ -54,142 +55,178 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
         scan(if (started) regexAfter else previous == null || previous in regexPrefix)
         return materialize()
     }
-    private fun finish(start: Int, tokenKind: Int) {
+    private fun finish(start: Int, tokenKind: Int, name: Boolean, tokenTag: Int) {
         offset = start
         end = p
         kind = tokenKind
-        tag = if (kind == 0) ScanTags.code(source, start, p) else -kind - 1
+        tag = tokenTag
         cachedText = null
-        updateContext()
+        updateContext(name)
     }
 
-    private fun isText(value: String): Boolean = end - offset == value.length && source.regionMatches(offset, value, 0, value.length)
+    private fun decodedString(): String {
+        val position = p
+        p = offset + 1
+        return try { quoted(source[offset], true)!! } finally { p = position }
+    }
 
-    private fun updateContext() {
+    private fun isText(value: String): Boolean = end - offset == value.length && source[offset] == value[0] && source.regionMatches(offset, value, 0, value.length)
+
+    private fun pushContext(context: Int) {
+        if (contextSize == contexts.size) contexts = contexts.copyOf((contextSize * 2).coerceAtLeast(16))
+        contexts[contextSize++] = context
+    }
+
+    private fun updateContext(name: Boolean) {
         val wasStatementStart = statementStart
-        val body = pendingBody
-        val switchBody = pendingSwitch
-        pendingBody = null
-        pendingSwitch = false
-        val name = kind == 0 && offset < end && source[offset].let { it.isLetter() || it == '_' || it == '$' }
         val memberName = name && (previousTag == ScanTags.DOT || previousTag == ScanTags.OPTIONAL)
-        if (tag != ScanTags.FUNCTION && tag != ScanTags.LPAREN && tag != ScanTags.STAR && !name) pendingFunction = null
-        when {
-            kind != 0 -> { regexAfter = false; statementStart = false }
-            memberName -> { regexAfter = false; statementStart = false }
-            tag == ScanTags.FUNCTION -> {
-                pendingFunction = !(statementStart || lineBreakBefore && !regexAfter)
-                regexAfter = false; statementStart = false
-            }
-            tag == ScanTags.LPAREN -> {
-                val control = previousTag in controlHeaders
-                contexts.addLast(Context(ScanTags.RPAREN, control, pendingFunction, previousTag == ScanTags.SWITCH))
-                pendingFunction = null
-                regexAfter = true; statementStart = false
-            }
-            tag == ScanTags.LBRACKET -> {
-                contexts.addLast(Context(ScanTags.RBRACKET, false))
-                regexAfter = true; statementStart = false
-            }
-            tag == ScanTags.LBRACE -> {
-                val block = body != null || statementStart || lineBreakBefore && !regexAfter || previousTag == ScanTags.ARROW ||
-                    previousTag == ScanTags.RETURN && lineBreakBefore
-                contexts.addLast(Context(ScanTags.RBRACE, if (body != null) !body else block && previousTag != ScanTags.ARROW, switchBody = switchBody))
-                regexAfter = true; statementStart = block
-            }
-            tag == ScanTags.RPAREN || tag == ScanTags.RBRACKET || tag == ScanTags.RBRACE -> {
-                val context = contexts.lastOrNull()?.takeIf { it.closing == tag }?.also { contexts.removeLast() }
-                caseHeaders.remove(contexts.size + 1)
-                while (questions.lastOrNull()?.let { it > contexts.size } == true) questions.removeLast()
-                regexAfter = context?.regexAfter ?: (tag == ScanTags.RBRACE)
-                pendingBody = context?.functionExpression
-                pendingSwitch = context?.switchBody == true && tag == ScanTags.RPAREN
-                statementStart = regexAfter
-            }
-            tag == ScanTags.SEMI || tag == ScanTags.ELSE || tag == ScanTags.CATCH || isText("do") || isText("try") || isText("finally") -> {
-                regexAfter = true; statementStart = true
-            }
-            contexts.lastOrNull()?.switchBody == true && (tag == ScanTags.CASE || isText("default")) -> {
-                caseHeaders.add(contexts.size)
-                regexAfter = true; statementStart = false
-            }
-            tag == ScanTags.QUESTION -> {
-                questions.addLast(contexts.size)
-                regexAfter = true; statementStart = false
-            }
-            tag == ScanTags.COLON -> {
-                val conditional = questions.lastOrNull() == contexts.size
-                if (conditional) questions.removeLast()
-                val caseHeader = !conditional && caseHeaders.remove(contexts.size)
-                regexAfter = true; statementStart = !conditional && (statementName || caseHeader)
-            }
-            else -> {
-                regexAfter = tag in regexTags || isText("in") || isText("instanceof")
-                statementStart = false
+        if (tag != ScanTags.FUNCTION && tag != ScanTags.LPAREN && tag != ScanTags.STAR && !name) pendingFunction = 0
+        if (kind != 0 || memberName) {
+            pendingBody = 0; pendingSwitch = false
+            regexAfter = false; statementStart = false
+        } else {
+            val flags = contextFlags[tag]
+            if (flags and CONTEXT_TOKEN != 0) updateSpecialContext()
+            else {
+                pendingBody = 0; pendingSwitch = false
+                regexAfter = flags and REGEX_AFTER != 0; statementStart = false
             }
         }
-        if (contexts.size > 1024) unsupported("Source nesting limit exceeded")
+        if (contextSize > 1024) unsupported("Source nesting limit exceeded")
         statementName = wasStatementStart && name
         previousTag = if (memberName) ScanTags.IDENTIFIER else tag
         started = true
+    }
+
+    private fun updateSpecialContext() {
+        val body = pendingBody
+        val switchBody = pendingSwitch
+        pendingBody = 0
+        pendingSwitch = false
+        when (tag) {
+            ScanTags.FUNCTION -> {
+                pendingFunction = if (statementStart || lineBreakBefore && !regexAfter) FUNCTION_DECLARATION else FUNCTION_EXPRESSION
+                regexAfter = false; statementStart = false
+            }
+            ScanTags.LPAREN -> {
+                val control = when (previousTag) {
+                    ScanTags.IF, ScanTags.WHILE, ScanTags.FOR, ScanTags.SWITCH, ScanTags.CATCH, ScanTags.WITH -> REGEX_AFTER
+                    else -> 0
+                }
+                pushContext(ScanTags.RPAREN or control or pendingFunction or if (previousTag == ScanTags.SWITCH) SWITCH_BODY else 0)
+                pendingFunction = 0
+                regexAfter = true; statementStart = false
+            }
+            ScanTags.LBRACKET -> {
+                pushContext(ScanTags.RBRACKET)
+                regexAfter = true; statementStart = false
+            }
+            ScanTags.LBRACE -> {
+                val block = body != 0 || statementStart || lineBreakBefore && !regexAfter || previousTag == ScanTags.ARROW ||
+                    previousTag == ScanTags.RETURN && lineBreakBefore
+                val after = if (body != 0) body == FUNCTION_DECLARATION else block && previousTag != ScanTags.ARROW
+                pushContext(ScanTags.RBRACE or (if (after) REGEX_AFTER else 0) or (if (switchBody) SWITCH_BODY else 0))
+                regexAfter = true; statementStart = block
+            }
+            ScanTags.RPAREN, ScanTags.RBRACKET, ScanTags.RBRACE -> {
+                val top = if (contextSize == 0) 0 else contexts[contextSize - 1]
+                val context = if (top and CLOSING_MASK == tag) { contextSize--; top } else 0
+                while (questionSize > 0 && questions[questionSize - 1] > contextSize) questionSize--
+                regexAfter = if (context != 0) context and REGEX_AFTER != 0 else tag == ScanTags.RBRACE
+                pendingBody = context and (FUNCTION_EXPRESSION or FUNCTION_DECLARATION)
+                pendingSwitch = context and SWITCH_BODY != 0 && tag == ScanTags.RPAREN
+                statementStart = regexAfter
+            }
+            ScanTags.SEMI, ScanTags.ELSE, ScanTags.CATCH -> {
+                regexAfter = true; statementStart = true
+            }
+            ScanTags.QUESTION -> {
+                if (questionSize == questions.size) questions = questions.copyOf((questionSize * 2).coerceAtLeast(8))
+                questions[questionSize++] = contextSize
+                regexAfter = true; statementStart = false
+            }
+            ScanTags.COLON -> {
+                val conditional = questionSize > 0 && questions[questionSize - 1] == contextSize
+                if (conditional) questionSize--
+                val caseHeader = !conditional && contextSize > 0 && contexts[contextSize - 1] and CASE_HEADER != 0
+                if (caseHeader) contexts[contextSize - 1] = contexts[contextSize - 1] and CASE_HEADER.inv()
+                regexAfter = true; statementStart = !conditional && (statementName || caseHeader)
+            }
+            else -> when {
+                tag == ScanTags.IDENTIFIER && (isText("do") || isText("try") || isText("finally")) -> {
+                    regexAfter = true; statementStart = true
+                }
+                contextSize > 0 && contexts[contextSize - 1] and SWITCH_BODY != 0 && (tag == ScanTags.CASE || tag == ScanTags.IDENTIFIER && isText("default")) -> {
+                    contexts[contextSize - 1] = contexts[contextSize - 1] or CASE_HEADER
+                    regexAfter = true; statementStart = false
+                }
+                else -> {
+                    regexAfter = contextFlags[tag] and REGEX_AFTER != 0 || tag == ScanTags.IDENTIFIER && (isText("in") || isText("instanceof"))
+                    statementStart = false
+                }
+            }
+        }
     }
 
     /** Advance without allocating token text. All literal validation still runs. */
     fun scan(regexAllowed: Boolean = true) {
         lineBreakBefore = false
         while (p < source.length) {
-            if (jsWhitespace(source[p])) { if (jsLineTerminator(source[p])) lineBreakBefore = true; p++; continue }
-            if (source.startsWith("//", p)) {
-                while (p < source.length && !jsLineTerminator(source[p])) p++
-                continue
-            }
-            if (source.startsWith("/*", p)) {
-                val end = source.indexOf("*/", p + 2)
-                if (end < 0) unsupported("Unclosed comment")
-                for (i in p + 2 until end) if (jsLineTerminator(source[i])) lineBreakBefore = true
-                p = end + 2; continue
+            val current = source[p]
+            if (jsWhitespace(current)) { if (jsLineTerminator(current)) lineBreakBefore = true; p++; continue }
+            if (current == '/' && p + 1 < source.length) {
+                if (source[p + 1] == '/') {
+                    while (p < source.length && !jsLineTerminator(source[p])) p++
+                    continue
+                }
+                if (source[p + 1] == '*') {
+                    val end = source.indexOf("*/", p + 2)
+                    if (end < 0) unsupported("Unclosed comment")
+                    for (i in p + 2 until end) if (jsLineTerminator(source[i])) lineBreakBefore = true
+                    p = end + 2; continue
+                }
             }
             break
         }
         val start = p
-        if (p == source.length) return finish(p, -1)
+        if (p == source.length) return finish(p, -1, false, 0)
         val c = source[p++]
         if (c == '`') {
             while (p < source.length) {
                 val ch = source[p++]
                 if (ch == '\\') { if (p < source.length) p++; continue }
-                if (ch == '`') return finish(start, 4)
+                if (ch == '`') return finish(start, 4, false, -5)
                 if (ch == '$' && p < source.length && source[p] == '{') unsupported("Template interpolation is unsupported")
             }
             unsupported("Unclosed template literal")
         }
         if (c == '\'' || c == '"') {
             quoted(c, false)
-            return finish(start, 1)
+            return finish(start, 1, false, -2)
         }
         if (c == '\\') unsupported("Escaped identifiers are unsupported")
-        if (c.isLetter() || c == '_' || c == '$') {
-            while (p < source.length && (source[p].isLetterOrDigit() || source[p] == '_' || source[p] == '$')) p++
-            return finish(start, 0)
+        if (identifierStart(c)) {
+            while (p < source.length && identifierPart(source[p])) p++
+            return finish(start, 0, true, if (p - start == 1) characterTag(c) else ScanTags.code(source, start, p))
         }
-        if (c.isDigit() || c == '.' && p < source.length && source[p].isDigit()) {
+        if (decimalDigit(c) || c == '.' && p < source.length && decimalDigit(source[p])) {
             if (c == '0' && p < source.length && source[p] in "xXbBoO") {
                 p++
-                while (p < source.length && source[p].isLetterOrDigit()) p++
+                while (p < source.length && letterOrDigit(source[p])) p++
             } else {
-                while (p < source.length && source[p].isDigit()) p++
+                while (p < source.length && decimalDigit(source[p])) p++
                 if (c != '.' && p < source.length && source[p] == '.') {
                     p++
-                    while (p < source.length && source[p].isDigit()) p++
+                    while (p < source.length && decimalDigit(source[p])) p++
                 }
                 if (p < source.length && source[p] in "eE") {
                     p++
                     if (p < source.length && source[p] in "+-") p++
-                    while (p < source.length && source[p].isDigit()) p++
+                    while (p < source.length && decimalDigit(source[p])) p++
                 }
-                while (p < source.length && source[p].isLetterOrDigit()) p++
+                while (p < source.length && letterOrDigit(source[p])) p++
             }
-            return finish(start, 2)
+            return finish(start, 2, false, -3)
         }
         if (c == '/' && regexAllowed) {
             var bracket = false
@@ -200,17 +237,75 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
                 if (ch == ']') bracket = false
                 if (ch == '/' && !bracket) {
                     while (p < source.length && source[p].isLetter()) p++
-                    return finish(start, 3)
+                    return finish(start, 3, false, -4)
                 }
                 if (jsLineTerminator(ch)) unsupported("Unclosed regex")
             }
             unsupported("Unclosed regex")
         }
-        for (op in operators[c].orEmpty()) if (source.startsWith(op, start)) {
-            p = start + op.length; return finish(start, 0)
-        }
-        return finish(start, 0)
+        return finish(start, 0, false, operatorTag(c))
     }
+
+    private fun characterTag(c: Char): Int = if (c < '\u0080') c.code else ScanTags.IDENTIFIER
+    private fun operatorChar(c: Char): Boolean {
+        if (p == source.length || source[p] != c) return false
+        p++
+        return true
+    }
+    private fun operatorTag(c: Char): Int = when (c) {
+        '=' -> when {
+            operatorChar('=') -> if (operatorChar('=')) ScanTags.STRICT_EQUAL else ScanTags.EQ
+            operatorChar('>') -> ScanTags.ARROW
+            else -> c.code
+        }
+        '!' -> if (operatorChar('=')) { if (operatorChar('=')) ScanTags.STRICT_NOT_EQUAL else ScanTags.NE } else c.code
+        '<' -> when {
+            operatorChar('<') -> if (operatorChar('=')) ScanTags.SHL_ASSIGN else ScanTags.SHL
+            operatorChar('=') -> ScanTags.LE
+            else -> c.code
+        }
+        '>' -> when {
+            operatorChar('>') -> when {
+                operatorChar('>') -> if (operatorChar('=')) ScanTags.USHR_ASSIGN else ScanTags.USHR
+                operatorChar('=') -> ScanTags.SHR_ASSIGN
+                else -> ScanTags.SHR
+            }
+            operatorChar('=') -> ScanTags.GE
+            else -> c.code
+        }
+        '&' -> when {
+            operatorChar('&') -> if (operatorChar('=')) ScanTags.AND_ASSIGN else ScanTags.AND
+            operatorChar('=') -> ScanTags.AMP_ASSIGN
+            else -> c.code
+        }
+        '|' -> when {
+            operatorChar('|') -> if (operatorChar('=')) ScanTags.OR_ASSIGN else ScanTags.OR
+            operatorChar('=') -> ScanTags.PIPE_ASSIGN
+            else -> c.code
+        }
+        '?' -> when {
+            operatorChar('?') -> if (operatorChar('=')) ScanTags.NULL_ASSIGN else ScanTags.NULLISH
+            operatorChar('.') -> ScanTags.OPTIONAL
+            else -> c.code
+        }
+        '+' -> when { operatorChar('+') -> ScanTags.INC; operatorChar('=') -> ScanTags.PLUS_ASSIGN; else -> c.code }
+        '-' -> when { operatorChar('-') -> ScanTags.DEC; operatorChar('=') -> ScanTags.MINUS_ASSIGN; else -> c.code }
+        '*' -> when {
+            operatorChar('*') -> if (operatorChar('=')) ScanTags.POW_ASSIGN else ScanTags.POW
+            operatorChar('=') -> ScanTags.STAR_ASSIGN
+            else -> c.code
+        }
+        '/' -> if (operatorChar('=')) ScanTags.SLASH_ASSIGN else c.code
+        '%' -> if (operatorChar('=')) ScanTags.MOD_ASSIGN else c.code
+        '^' -> if (operatorChar('=')) ScanTags.CARET_ASSIGN else c.code
+        '.' -> if (p + 1 < source.length && source[p] == '.' && source[p + 1] == '.') { p += 2; ScanTags.SPREAD } else c.code
+        else -> characterTag(c)
+    }
+
+    private fun identifierStart(c: Char): Boolean = if (c < '\u0080') asciiCharacters[c.code] and 1 != 0 else c.isLetter()
+    private fun identifierPart(c: Char): Boolean = if (c < '\u0080') asciiCharacters[c.code] and 2 != 0 else c.isLetterOrDigit()
+    private fun decimalDigit(c: Char): Boolean = if (c < '\u0080') c in '0'..'9' else c.isDigit()
+    private fun letterOrDigit(c: Char): Boolean = if (c < '\u0080') asciiCharacters[c.code] and 4 != 0 else c.isLetterOrDigit()
 
     private fun quoted(c: Char, decode: Boolean): String? {
         val result = if (decode) StringBuilder() else null
@@ -231,7 +326,7 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
                         val n = source.substring(p, p + length).toIntOrNull(16) ?: unsupported("Invalid string escape")
                         result?.append(n.toChar()); p += length
                     }
-                    '0' -> { if (p < source.length && source[p].isDigit()) unsupported("Legacy octal string escape"); result?.append('\u0000') }
+                    '0' -> { if (p < source.length && decimalDigit(source[p])) unsupported("Legacy octal string escape"); result?.append('\u0000') }
                     in '1'..'7' -> unsupported("Legacy octal string escape")
                     else -> result?.append(ch)
                 }
@@ -244,19 +339,41 @@ internal class Lexer(private val source: String, private var p: Int = 0) {
     }
 
     companion object {
-        private val controlHeaders = intArrayOf(ScanTags.IF, ScanTags.WHILE, ScanTags.FOR, ScanTags.SWITCH, ScanTags.CATCH, ScanTags.WITH)
-        private val regexTags = intArrayOf(
-            ScanTags.EQUAL, ScanTags.COMMA, ScanTags.RETURN, ScanTags.CASE, ScanTags.BANG, ScanTags.AND, ScanTags.OR,
-            ScanTags.QUESTION, ScanTags.PLUS, ScanTags.MINUS, ScanTags.STAR, ScanTags.CARET, ScanTags.AMP, ScanTags.PIPE, ScanTags.THROW,
-            ScanTags.STRICT_EQUAL, ScanTags.STRICT_NOT_EQUAL, ScanTags.EQ, ScanTags.NE, '<'.code, '>'.code, ScanTags.LE, ScanTags.GE,
-            '%'.code, '/'.code, ScanTags.POW, ScanTags.SHL, ScanTags.SHR, ScanTags.USHR, ScanTags.NULLISH,
-            ScanTags.PLUS_ASSIGN, ScanTags.MINUS_ASSIGN, ScanTags.STAR_ASSIGN, ScanTags.SLASH_ASSIGN, ScanTags.MOD_ASSIGN,
-            ScanTags.AMP_ASSIGN, ScanTags.PIPE_ASSIGN, ScanTags.CARET_ASSIGN, ScanTags.SHL_ASSIGN, ScanTags.SHR_ASSIGN,
-            ScanTags.USHR_ASSIGN, ScanTags.POW_ASSIGN, ScanTags.AND_ASSIGN, ScanTags.OR_ASSIGN, ScanTags.NULL_ASSIGN,
-            ScanTags.ARROW, ScanTags.TYPEOF, ScanTags.VOID, ScanTags.DELETE, ScanTags.NEW, '~'.code,
-        )
+        private val asciiCharacters = IntArray(128) { code ->
+            val c = code.toChar()
+            when (c) {
+                in 'A'..'Z', in 'a'..'z' -> 1 or 2 or 4
+                '_', '$' -> 1 or 2
+                in '0'..'9' -> 2 or 4
+                else -> 0
+            }
+        }
+        private val emptyStack = IntArray(0)
+        private const val CLOSING_MASK = 255
+        private const val CONTEXT_TOKEN = 1
+        private const val REGEX_AFTER = 1 shl 8
+        private const val FUNCTION_EXPRESSION = 1 shl 9
+        private const val FUNCTION_DECLARATION = 1 shl 10
+        private const val SWITCH_BODY = 1 shl 11
+        private const val CASE_HEADER = 1 shl 12
+        private val contextFlags = IntArray(ScanTags.LENGTH + 1).also { tags ->
+            for (tag in intArrayOf(
+                ScanTags.EQUAL, ScanTags.COMMA, ScanTags.RETURN, ScanTags.CASE, ScanTags.BANG, ScanTags.AND, ScanTags.OR,
+                ScanTags.QUESTION, ScanTags.PLUS, ScanTags.MINUS, ScanTags.STAR, ScanTags.CARET, ScanTags.AMP, ScanTags.PIPE, ScanTags.THROW,
+                ScanTags.STRICT_EQUAL, ScanTags.STRICT_NOT_EQUAL, ScanTags.EQ, ScanTags.NE, '<'.code, '>'.code, ScanTags.LE, ScanTags.GE,
+                '%'.code, '/'.code, ScanTags.POW, ScanTags.SHL, ScanTags.SHR, ScanTags.USHR, ScanTags.NULLISH,
+                ScanTags.PLUS_ASSIGN, ScanTags.MINUS_ASSIGN, ScanTags.STAR_ASSIGN, ScanTags.SLASH_ASSIGN, ScanTags.MOD_ASSIGN,
+                ScanTags.AMP_ASSIGN, ScanTags.PIPE_ASSIGN, ScanTags.CARET_ASSIGN, ScanTags.SHL_ASSIGN, ScanTags.SHR_ASSIGN,
+                ScanTags.USHR_ASSIGN, ScanTags.POW_ASSIGN, ScanTags.AND_ASSIGN, ScanTags.OR_ASSIGN, ScanTags.NULL_ASSIGN,
+                ScanTags.ARROW, ScanTags.TYPEOF, ScanTags.VOID, ScanTags.DELETE, ScanTags.NEW, '~'.code,
+            )) tags[tag] = REGEX_AFTER
+            for (tag in intArrayOf(
+                ScanTags.FUNCTION, ScanTags.LPAREN, ScanTags.LBRACKET, ScanTags.LBRACE,
+                ScanTags.RPAREN, ScanTags.RBRACKET, ScanTags.RBRACE, ScanTags.SEMI, ScanTags.ELSE,
+                ScanTags.CATCH, ScanTags.QUESTION, ScanTags.COLON, ScanTags.IDENTIFIER, ScanTags.CASE,
+            )) tags[tag] = tags[tag] or CONTEXT_TOKEN
+        }
         private val regexPrefix = setOf("=", "(", "[", ",", ":", ";", "return", "case", "else", "!", "&&", "||", "?", "{", "}", "+", "-", "*", "^", "&", "|", "throw", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "%", "/", "**", "<<", ">>", ">>>", "??", "typeof", "void", "delete", "new", "in", "instanceof", "~")
-        private val operators = listOf(">>>=", "&&=", "||=", "??=", "===", "!==", ">>>", "<<=", ">>=", "**=", "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "?.", "...").groupBy { it[0] }
     }
 }
 
