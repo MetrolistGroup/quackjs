@@ -254,7 +254,8 @@ internal data class TryStmt(val body: Stmt, val catchName: String?, val handler:
 internal data class SwitchStmt(val expr: Expr, val cases: List<Pair<Expr?, List<Stmt>>>) : Stmt
 internal data object EmptyStmt : Stmt
 
-internal class Parser(private val tokens: List<Token>, private val source: String? = null) {
+internal class Parser(private val tokens: List<Token>, private val source: String? = null, private val budget: CompilationBudget = CompilationBudget()) {
+    init { budget.reserveSyntax(tokens.size) }
     private var p = 0
     private var depth = 0
     private val t get() = tokens[p].text
@@ -275,7 +276,7 @@ internal class Parser(private val tokens: List<Token>, private val source: Strin
     fun completeExpression(): Expr {
         val e = expression()
         if (tokens[p].kind != -1) unsupported("Unexpected token '$t'")
-        validateDepth(e)
+        validateDepth(e, budget)
         return e
     }
     fun expression(min: Int = 0): Expr = nested {

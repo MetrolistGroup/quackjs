@@ -69,9 +69,9 @@ internal class HotCharacterPlan private constructor(
             val second = difference.right as? Call ?: return null
             if (first.construct || second.construct || first.args != listOf(Id(code.params[0])) || second.args != listOf(Member(Id("this"), Id(code.params[1])))) return null
             val index = first.fn as? Member ?: return null
-            if (index.target != table || second.fn != index) return null
             // The only omitted key expressions are primitive reads; none may observe the counter write.
             if (!listOf(push.key, index.key, length.key).all { supportedKey(it, counter.name) }) return null
+            if (index.target != table || second.fn != index) return null
             return HotCharacterPlan(code, table, counter, push.key, index.key, length.key)
         }
 

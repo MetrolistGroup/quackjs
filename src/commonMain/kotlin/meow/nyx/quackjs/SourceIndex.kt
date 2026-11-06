@@ -2,6 +2,7 @@ package meow.nyx.quackjs
 
 /** Lex once to index the player scope; parse and execute only selected dependencies. */
 internal class SourceIndex(val source: String, className: String) {
+    internal val compilationBudget = CompilationBudget()
     private class ScanBudget {
         private var tokens = 0
         private var units = 0
@@ -265,7 +266,7 @@ internal class SourceIndex(val source: String, className: String) {
     }
 
     private fun targetExpression(tokens: List<Token>): Expr? =
-        try { Parser(tokens + Token("<eof>", -1), source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+        try { Parser(tokens + Token("<eof>", -1), source, compilationBudget).completeExpression() } catch (_: UnsupportedPlayerException) { null }
 
     /** Prove initializer value kinds without executing unrelated player code. */
     private fun definitionKind(name: String, known: MutableMap<String, DefinitionKind>, scans: ScanBudget, nativeSplit: Boolean, names: Map<String, List<Assignment>>, writeCounts: Map<String, Int>, resolving: MutableSet<String> = mutableSetOf()): DefinitionKind {
@@ -297,7 +298,7 @@ internal class SourceIndex(val source: String, className: String) {
                 if (first.tag == ScanTags.FUNCTION || first.tag == ScanTags.LBRACE) DefinitionKind.UNKNOWN
                 else {
                     val tokens = slice(offset, scans)
-                    val expr = try { Parser(tokens, source).completeExpression() } catch (_: UnsupportedPlayerException) { null }
+                    val expr = try { Parser(tokens, source, compilationBudget).completeExpression() } catch (_: UnsupportedPlayerException) { null }
                     expr?.let(::kind) ?: DefinitionKind.UNKNOWN
                 }
             }
@@ -409,14 +410,14 @@ internal class SourceIndex(val source: String, className: String) {
 
     fun hasDefinition(name: String): Boolean = definitions.containsKey(name)
 
-    fun definition(name: String): Expr {
+    fun definition(name: String, budget: CompilationBudget = CompilationBudget()): Expr {
         val offset = definitions[name] ?: unsupported("Missing dependency '$name'")
         if (offset == AMBIGUOUS) unsupported("Ambiguous dependency '$name'")
         if (offset == MUTATED) unsupported("Externally mutated dependency '$name'")
-        return parseAt(offset)
+        return parseAt(offset, budget)
     }
 
-    fun parseAt(offset: Int): Expr = Parser(slice(offset), source).completeExpression()
+    fun parseAt(offset: Int, budget: CompilationBudget = CompilationBudget()): Expr = Parser(slice(offset), source, budget).completeExpression()
 
     private fun slice(offset: Int, scans: ScanBudget? = null): List<Token> {
         val lexer = Lexer(source, offset)
@@ -438,22 +439,22 @@ internal class SourceIndex(val source: String, className: String) {
         }
     }
 
-    fun classFunction(name: String): FunctionExpr {
+    fun classFunction(name: String, budget: CompilationBudget = CompilationBudget()): FunctionExpr {
         val entry = assignments.singleOrNull { classTarget(it.lhs, name) }
             ?: unsupported("Missing or ambiguous n class '$name'")
-        return parseAt(entry.offset) as? FunctionExpr ?: unsupported("Unsupported n class")
+        return parseAt(entry.offset, budget) as? FunctionExpr ?: unsupported("Unsupported n class")
     }
 
     fun method(name: String, methodName: String, runtime: Runtime): FunctionExpr {
         val methods = mutableListOf<FunctionExpr>()
         for (entry in assignments) {
             if (entry.lhs.take(3).map(Token::text) != listOf("g", ".", name) || entry.lhs.size == 3) continue
-            val target = Parser(entry.lhs + Token("<eof>", -1), source).completeExpression() as? Member ?: continue
+            val target = Parser(entry.lhs + Token("<eof>", -1), source, runtime.compilationBudget).completeExpression() as? Member ?: continue
             val parent = target.target as? Member ?: continue
             val root = parent.target as? Member ?: continue
             if (root.target != Id("g") || root.key != Lit(name)) continue
             if (runtime.expression(parent.key) == JsString("prototype") && runtime.expression(target.key) == JsString(methodName)) {
-                methods.add(parseAt(entry.offset) as? FunctionExpr ?: unsupported("Invalid n method"))
+                methods.add(parseAt(entry.offset, runtime.compilationBudget) as? FunctionExpr ?: unsupported("Invalid n method"))
             }
         }
         if (methods.size != 1) unsupported("Missing or ambiguous n $methodName method for '$name'")

@@ -395,7 +395,7 @@ class PlayerProgramTest {
 
     @Test fun functionFramesConsumeTheAllocationBudget() {
         val locals = (0 until 10_000).joinToString(",") { "v$it" }
-        val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){var $locals;};")
+        val p = compile("if(x=='evil')for(var i=0;i<1000;i++)large();return x;", extra = "var large=function(){if(false){var $locals;}};")
         val error = assertFailsWith<UnsupportedPlayerException> { p.decipherSignature("evil") }
         assertTrue(error.message!!.contains("Allocation limit"))
     }

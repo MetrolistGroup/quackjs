@@ -23,7 +23,7 @@ internal class Env(val parent: Env? = null, private val names: Map<String, Int>?
     operator fun set(name: String, value: JsValue) { val slot = names?.get(name); if (slot == null) { values[name] = value; revision++ } else slots[slot] = value }
 }
 
-internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, JsValue> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0, private val analysis: LinearNAnalysis? = null) {
+internal class Runtime(val source: SourceIndex, private val parsed: Map<String, Expr> = emptyMap(), private val templates: Map<String, JsValue> = emptyMap(), private val dates: Map<String, Double> = emptyMap(), private val dispatch: Map<DispatchKey, Block> = emptyMap(), recordDispatch: Boolean = false, globalCount: Int = 0, private val analysis: LinearNAnalysis? = null, internal val compilationBudget: CompilationBudget = CompilationBudget()) {
     val definitions = mutableMapOf<String, Expr>()
     val constantDates = mutableMapOf<String, Double>()
     val specializedBodies: MutableMap<DispatchKey, Block>? = if (recordDispatch) mutableMapOf() else null
@@ -185,7 +185,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         if (!resolving.add(name)) unsupported("Circular initializer '$name'")
         if (resolving.size > 64 || parsed.size + definitions.size > 512) unsupported("Dependency limit exceeded")
         try {
-            val expr = parsed[name] ?: definitions.getOrPut(name) { source.definition(name) }
+            val expr = parsed[name] ?: definitions.getOrPut(name) { source.definition(name, compilationBudget) }
             val value = templates[name]?.let(::copyTemplate) ?: eval(expr, global)
             global.values[name] = value
             return value
@@ -294,6 +294,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
     fun functionEnv(fn: JsFunction, self: JsValue, args: List<JsValue>, reuse: Env? = null): Env {
         if (reuse == null) allocate(fn.code.slots.size)
         tick(fn.code.slots.size)
+        tick(fn.code.parameterSlots.size)
         val env = reuse ?: Env(fn.env, fn.code.slots)
         if (reuse != null) env.slots.fill(Undefined)
         env.slots[fn.code.thisSlot] = self
@@ -316,7 +317,7 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
                             stringMethods["split"] -> if (self is LinearString) return analysis.split(this, self, args)
                             arrayMethods["indexOf"] -> {
                                 if (args.firstOrNull() is LinearValue) return analysis.indexOf(this, self, args)
-                                if (self is JsArray && self.values.any { it is LinearValue }) linearReject("search of symbolic array")
+                                if (self is JsArray && self.values.any { tick(); it is LinearValue }) linearReject("search of symbolic array")
                             }
                             stringMethods["toString"], stringMethods["valueOf"] -> if (self is LinearString) return self
                         }
@@ -357,7 +358,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
         when (stmt) {
             is Block -> for (i in stmt.statements.indices) { val flow = exec(stmt.statements[i], env); if (flow !== Completion.Normal) return flow }
             is ExpressionStmt -> { eval(stmt.expr, env) }
-            is Vars -> for (i in stmt.items.indices) { val (name, expr) = stmt.items[i]; if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
+            is Vars -> {
+                tick(stmt.items.size)
+                for (i in stmt.items.indices) { val (name, expr) = stmt.items[i]; if (expr != null) (env.owner(name) ?: env)[name] = eval(expr, env) }
+            }
             is IfStmt -> return if (truth(eval(stmt.test, env))) exec(stmt.yes, env) else stmt.no?.let { exec(it, env) } ?: Completion.Normal
             is ReturnStmt -> return Completion.Returned(if (stmt.expr == null) Undefined else eval(stmt.expr, env))
             is ThrowStmt -> throw JsThrown(eval(stmt.expr, env))
@@ -395,9 +399,10 @@ internal class Runtime(val source: SourceIndex, private val parsed: Map<String, 
             }
             is SwitchStmt -> {
                 val value = eval(stmt.expr, env)
-                var start = stmt.cases.indexOfFirst { it.first != null && equal(value, eval(it.first!!, env), true) }
-                if (start < 0) start = stmt.cases.indexOfFirst { it.first == null }
+                var start = stmt.cases.indexOfFirst { tick(); it.first != null && equal(value, eval(it.first!!, env), true) }
+                if (start < 0) start = stmt.cases.indexOfFirst { tick(); it.first == null }
                 if (start >= 0) for (i in start until stmt.cases.size) {
+                    tick()
                     val statements = stmt.cases[i].second
                     for (j in statements.indices) {
                         val flow = exec(statements[j], env)

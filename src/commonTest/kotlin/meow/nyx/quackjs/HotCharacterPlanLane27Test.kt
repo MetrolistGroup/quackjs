@@ -88,13 +88,13 @@ class HotCharacterPlanLane27Test {
 
     @Test fun exactInterpreterStepAndAllocationChargesAreRetained() {
         val indexed = body.replace(".push", "[keys[mask^7]]").replace(".indexOf", "[keys[mask^6]]").replace(".length", "[keys[2]]")
-        for ((callback, steps) in listOf(code() to 70, code(indexed) to 88)) for (fast in listOf(false, true)) {
+        for ((callback, steps) in listOf(code() to 73, code(indexed) to 91)) for (fast in listOf(false, true)) {
             val fractional = state(callback, remaining = 0.5)
             assertFailsWith<UnsupportedPlayerException> {
                 if (fast) callback.hotCharacterPlan!!.execute(fractional.runtime, fractional.env) else fractional.runtime.exec(callback.body, fractional.env)
             }
             val s = state(callback)
-            // Five frame slots plus callback steps; 6 frame units plus 8 native-call units.
+            // Five frame slots and three parameters plus callback steps; 6 frame units plus 8 native-call units.
             s.runtime.tick(2_000_000 - steps)
             var units = 2_000_000 - 14
             while (units > 0) { val chunk = minOf(units, 65_537); s.runtime.allocate(chunk - 1); units -= chunk }
