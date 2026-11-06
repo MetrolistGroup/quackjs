@@ -239,8 +239,10 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
                 var base: Expr = target
                 while (base is Member) base = base.target
                 val bound = substitute(base, bindings, env, budget)
-                // Dropping global writes can change a helper's input state.
+                // Dropping global writes or n-table writes can change a helper's input state.
                 if (bound != RootArgument && (bound !is Id || env.owner(bound.name)?.frame == null)) discardedWrite = true
+                val written = target.target.let { substitute(it, bindings, env, budget) }
+                if (written == Member(RootArgument, Lit(mapKey))) discardedWrite = true
                 if (substitute(target, bindings, env, budget) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
             }
         }, prefix = prefix) { call, guards ->

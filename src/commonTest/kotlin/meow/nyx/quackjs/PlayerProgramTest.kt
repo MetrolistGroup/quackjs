@@ -93,6 +93,12 @@ class PlayerProgramTest {
         }
     }
 
+    @Test fun nIsolationRejectsDiscardedRootWrites() {
+        val extra = "var rootN=function(o){o.set('n',o.V.n+o.V.p)};"
+        val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "this.V.p='!';rootN(this);this.raw.toUpperCase();return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+    }
+
     @Test fun nIsolationRejectsShadowedGlobalHelpers() {
         val extra = "var rootN=function(o){o.set('n','wrong:'+o.V.n)};"
         val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var rootN=function(o){o.set('n',o.V.n.split('').reverse().join(''))};rootN(this);this.raw.match('x');return this.V[k];")
