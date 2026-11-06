@@ -64,8 +64,12 @@ public class PlayerProgram private constructor(
          */
         public fun compile(playerJs: String, hints: PlayerHints? = null): PlayerProgram {
             if (playerJs.length > 8 * 1024 * 1024) unsupported("Player source limit exceeded")
-            val derived = hints ?: derive(playerJs)
+            val landmark = if (hints == null) derive(playerJs) else null
+            val derived = hints ?: landmark!!.hints
             val source = SourceIndex(playerJs, derived.nClass)
+            landmark?.let { derivedLandmark ->
+                for (offset in derivedLandmark.signatureOffsets) source.requireGlobalCall(offset, derived.signatureExpression.substringBefore("("))
+            }
             if (derived.signatureExpression.length > 512) unsupported("Signature expression limit exceeded")
             val signature = Parser(Lexer(derived.signatureExpression).tokens(), derived.signatureExpression, source.compilationBudget).completeExpression()
             validateSignatureExpression(signature)
@@ -97,8 +101,10 @@ public class PlayerProgram private constructor(
             }
         }
 
-        private fun derive(source: String): PlayerHints {
-            data class Landmark(val signature: String, val nClass: String, val locations: List<Pair<Int, String>>)
+        private data class Derived(val hints: PlayerHints, val signatureOffsets: List<Int>)
+
+        private fun derive(source: String): Derived {
+            data class Landmark(val signature: String, val nClass: String, val signatureOffset: Int, val locations: List<Pair<Int, String>>, val identifiers: Set<Int>)
             val candidates = mutableListOf<Landmark>()
             var from = 0
             while (true) {
@@ -108,11 +114,19 @@ public class PlayerProgram private constructor(
                 val beforeStart = (alr - 160).coerceAtLeast(0)
                 val before = source.substring(beforeStart, alr)
                 val after = source.substring(alr, (alr + 260).coerceAtMost(source.length))
-                val n = Regex("new\\s+g\\.([A-Za-z0-9_$]+)\\s*\\([^,()]+,\\s*!0\\s*\\)").findAll(before).lastOrNull() ?: continue
-                val sig = Regex("([A-Za-z0-9_$]+)\\((\\d+),(\\d+),\\s*[A-Za-z0-9_$]+\\(\\d+,\\d+,").find(after) ?: continue
-                if (candidates.size >= 1024) unsupported("Player landmark limit exceeded")
-                candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[1],
-                    listOf(alr to ".", beforeStart + n.range.first to "new", alr + sig.range.first to sig.groupValues[1])))
+                val receiver = Regex("[A-Za-z0-9_$]+$").find(before) ?: continue
+                val constructors = Regex("([A-Za-z0-9_$]+)\\s*=\\s*(new\\s+g\\.([A-Za-z0-9_$]+)\\s*\\([^,()]+,\\s*!0\\s*\\))").findAll(before)
+                    .filter { it.groupValues[1] == receiver.value }.toList()
+                val n = constructors.singleOrNull() ?: continue
+                for (sig in Regex("([A-Za-z0-9_$]+)\\((\\d+),(\\d+),\\s*[A-Za-z0-9_$]+\\(\\d+,\\d+,").findAll(after)) {
+                    if (candidates.size >= 1024) unsupported("Player landmark limit exceeded")
+                    val sigOffset = alr + sig.range.first
+                    val constructorOffset = beforeStart + n.range.first
+                    val receiverOffset = beforeStart + receiver.range.first
+                    candidates.add(Landmark("${sig.groupValues[1]}(${sig.groupValues[2]},${sig.groupValues[3]},INPUT)", n.groupValues[3], sigOffset,
+                        listOf(alr to ".", constructorOffset to receiver.value, beforeStart + n.groups[2]!!.range.first to "new", receiverOffset to receiver.value, sigOffset to sig.groupValues[1]),
+                        setOf(constructorOffset, receiverOffset, sigOffset)))
+                }
             }
             // A landmark inside a comment, string or template is never executable code.
             val wanted = candidates.flatMap { it.locations }.toSet()
@@ -120,6 +134,8 @@ public class PlayerProgram private constructor(
             val actual = mutableSetOf<Pair<Int, String>>()
             val lexer = Lexer(source)
             var previous = true
+            var previousTag = -1
+            val qualified = mutableSetOf<Int>()
             var count = 0
             val end = wanted.maxOfOrNull { it.first } ?: -1
             while (end >= 0) {
@@ -129,12 +145,16 @@ public class PlayerProgram private constructor(
                 if (lexer.kind == 0) for (location in byOffset[lexer.offset].orEmpty()) {
                     if (lexer.end - lexer.offset == location.second.length && source.regionMatches(lexer.offset, location.second, 0, location.second.length)) actual.add(location)
                 }
+                if (lexer.offset in byOffset && (previousTag == ScanTags.DOT || previousTag == ScanTags.OPTIONAL || previousTag == ScanTags.NEW)) qualified.add(lexer.offset)
+                previousTag = lexer.tag
                 previous = lexer.regexAfter
             }
-            val valid = candidates.filter { actual.containsAll(it.locations) }.map { it.signature to it.nClass }.toSet()
+            val executable = candidates.filter { actual.containsAll(it.locations) }
+            if (executable.any { landmark -> landmark.identifiers.any { it in qualified } }) unsupported("Unsupported qualified signature/n landmark")
+            val valid = executable.distinctBy { it.signature to it.nClass }
             if (valid.size != 1) unsupported("Missing or ambiguous signature/n landmarks; supply PlayerHints")
-            val (signature, nClass) = valid.single()
-            return PlayerHints(signature, nClass, 0)
+            val selected = valid.single()
+            return Derived(PlayerHints(selected.signature, selected.nClass, 0), executable.map { it.signatureOffset }.distinct())
         }
 
         private fun validateSignatureExpression(expr: Expr) {
@@ -265,12 +285,22 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             else -> false
         }
         var rootWrite = false
+        var discardedWrite = false
         var unresolvedRootCalls = 0
         val discovered = mutableListOf<Candidate>()
         // Invalidate bindings in order; a later write must not change an earlier call site.
         walk(candidate.function.body, runtime, env, dynamic, write = { target ->
-            if (target is Id) { bindings.remove(target.name); dynamic.add(target.name) }
-            else if (target is Member && substitute(target, bindings, env, budget) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
+            if (target is Id) {
+                if (env.owner(target.name)?.frame == null) discardedWrite = true
+                bindings.remove(target.name); dynamic.add(target.name)
+            } else if (target is Member) {
+                var base: Expr = target
+                while (base is Member) base = base.target
+                val bound = substitute(base, bindings, env, budget)
+                // Dropping global writes can change a helper's input state.
+                if (bound != RootArgument && (bound !is Id || env.owner(bound.name)?.frame == null)) discardedWrite = true
+                if (substitute(target, bindings, env, budget) == Member(Member(RootArgument, Lit(mapKey)), Lit("n"))) rootWrite = true
+            }
         }, prefix = prefix) { call, guards ->
             var target = call.fn
             var selfRoot = false
@@ -289,7 +319,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
                 selfRoot = self == RootArgument
                 argExprs = argExprs.drop(1); target = target.target
             }
-            if (target !is Id || call.construct) return@walk
+            if (target !is Id || call.construct || env.owner(target.name)?.frame != null || target.name in dynamic) return@walk
             if (!argExprs.all(::constant)) return@walk
             val boundArgs = argExprs.map { substitute(it, bindings, env, budget) ?: return@walk }
             boundArgs.forEach { validateDepth(it, budget) }
@@ -314,7 +344,7 @@ private fun discoverN(source: SourceIndex, name: String, runtime: Runtime): NPla
             if (rootTail) unresolvedRootCalls--
         }
         // An unbound or guarded second root call may overwrite an earlier helper's result.
-        if (!rootWrite && unresolvedRootCalls == 0) pending.addAll(discovered)
+        if (!rootWrite && !discardedWrite && unresolvedRootCalls == 0) pending.addAll(discovered)
     }
     return selected?.second ?: unsupported("Cannot isolate n transform: $lastError")
 }

@@ -50,10 +50,11 @@ export function solve(player, inputs, source, globals) {
     const context = vm.createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } });
     vm.runInContext(globals, context, { timeout: 30_000 });
     vm.runInContext(code.replace(trailer, exports + trailer), context, { timeout: 30_000, filename: player.id + '.js' });
-    const result = JSON.parse(vm.runInContext(`globalThis.__inputs=${JSON.stringify(inputs)}; JSON.stringify({
-        signature: __inputs.signature.map(c => ({...c, output: __quackSig(c.input)})),
-        n: __inputs.n.map(c => ({...c, output: __quackN(c.input)}))
-    })`, context, { timeout: 30_000 }));
+    const result = JSON.parse(vm.runInContext(`globalThis.__inputs=${JSON.stringify(inputs)}; JSON.stringify(Object.fromEntries(['signature', 'n'].map(kind => [kind, __inputs[kind].map(c => {
+        const output = (kind === 'signature' ? __quackSig : __quackN)(c.input);
+        if (typeof output !== 'string') throw new TypeError(kind + ' oracle returned not a string');
+        return {...c, output};
+    })])))`, context, { timeout: 30_000 }));
     for (const kind of ['signature', 'n']) {
         for (const sample of result[kind]) {
             assert.equal(typeof sample.output, 'string', `${player.id}/${kind}/${sample.name}: not a string`);

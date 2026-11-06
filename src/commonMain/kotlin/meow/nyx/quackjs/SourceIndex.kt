@@ -410,6 +410,29 @@ internal class SourceIndex(val source: String, className: String) {
 
     fun hasDefinition(name: String): Boolean = definitions.containsKey(name)
 
+    fun requireGlobalCall(offset: Int, name: String) {
+        val entry = assignments.filter { it.offset <= offset }.maxByOrNull { it.offset }
+            ?: unsupported("Cannot establish signature callee binding")
+        val tokens = slice(entry.offset)
+        if (tokens.last().offset <= offset) unsupported("Cannot establish signature callee binding")
+        for (token in tokens) {
+            if (token.offset >= offset) break
+            if (token.kind != 0 || token.text != "function") continue
+            val enclosing = slice(token.offset)
+            if (enclosing.last().offset <= offset) continue
+            val fn = Parser(enclosing, source, compilationBudget).completeExpression() as? FunctionExpr
+                ?: unsupported("Cannot establish signature callee binding")
+            if (name in fn.slots) unsupported("Shadowed signature callee")
+            val pending = ArrayDeque<SyntaxNode>()
+            pending.add(fn.body)
+            while (pending.isNotEmpty()) {
+                val node = pending.removeLast()
+                if (node is TryStmt && node.catchName == name) unsupported("Shadowed signature callee")
+                if (node !is FunctionExpr) syntaxChildren(node) { pending.add(it) }
+            }
+        }
+    }
+
     fun definition(name: String, budget: CompilationBudget = CompilationBudget()): Expr {
         val offset = definitions[name] ?: unsupported("Missing dependency '$name'")
         if (offset == AMBIGUOUS) unsupported("Ambiguous dependency '$name'")

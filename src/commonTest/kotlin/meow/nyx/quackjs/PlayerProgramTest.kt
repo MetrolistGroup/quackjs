@@ -67,6 +67,60 @@ class PlayerProgramTest {
         assertNull(PlayerProgram.compile((fake + js).replace("signatureTimestamp:20724", "other:20724")).signatureTimestamp)
     }
 
+    @Test fun nIsolationRejectsDiscardedGlobalWrites() {
+        val extra = "var state={tag:'a'};var rootN=function(o){o.set('n',state.tag+o.V.n.split('').reverse().join(''))};"
+        for (write in listOf("state.tag='b'", "state={tag:'b'}", "var alias=state;alias.tag='b'")) {
+            val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "$write;rootN(this);this.raw.toUpperCase();return this.V[k];")
+            assertFailsWith<UnsupportedPlayerException>(write) { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+        }
+    }
+
+    @Test fun nIsolationRejectsShadowedGlobalHelpers() {
+        val extra = "var rootN=function(o){o.set('n','wrong:'+o.V.n)};"
+        val js = source(extra = extra).replace("applyN(7,19,this);return this.V[k];", "var rootN=function(o){o.set('n',o.V.n.split('').reverse().join(''))};rootN(this);this.raw.match('x');return this.V[k];")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js, PlayerHints("sig(INPUT)", "C", 12345)) }
+    }
+
+    private fun landmark(body: String, extra: String = ""): String = source(extra = extra) + """
+        var decode=function(a,b,x){return x};
+        var sig2=function(a,b,x){return sig(x)};
+        var landmark=function(M,Q,X){$body};
+    """
+
+    @Test fun nLandmarkUsesTheAlrReceiverConstructor() {
+        val js = landmark("M=new g.C(M,!0);Q=new g.D(Q,!0);M.set(\"alr\",\"yes\");X=sig2(11,3932,decode(3,673,X));", """
+            g.D=function(raw,enabled){this.raw=raw;this.V={}};
+            g.D.prototype.set=function(k,v){this.V[k]=v};
+            g.D.prototype.get=function(k){this.set('n','d'+this.V.n);return this.V[k]};
+        """)
+        assertEquals("cba", PlayerProgram.compile(js).transformN("abc"))
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js.replace("M.set(\"alr\"", "other.set(\"alr\"")) }
+    }
+
+    @Test fun signatureLandmarksRejectDistinctExecutableMatches() {
+        val js = landmark("M=new g.C(M,!0);M.set(\"alr\",\"yes\");audit(1,2,decode(3,4,X));X=sig2(11,3932,decode(3,673,X));", "var audit=function(a,b,x){return x+'!'};")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(js) }
+    }
+
+    @Test fun signatureLandmarksCheckEveryMatchingCallBinding() {
+        val prefix = "M=new g.C(M,!0);M.set(\"alr\",\"yes\");"
+        val first = landmark(prefix + "X=sig2(11,3932,decode(3,673,X));")
+        val second = "var another=function(M,X,sig2){" + prefix + "X=sig2(11,3932,decode(3,673,X));};"
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(first + second) }
+    }
+
+    @Test fun signatureLandmarksRejectMemberAndShadowedCallees() {
+        val prefix = "M=new g.C(M,!0);M.set(\"alr\",\"yes\");"
+        val member = landmark(prefix + "X=holder.sig2(11,3932,decode(3,673,X));", "var holder={sig2:function(a,b,x){return x+'!'}};")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(member) }
+        for (body in listOf(
+            "var sig2=function(a,b,x){return x+'!'};X=sig2(11,3932,decode(3,673,X));",
+            "X=sig2(11,3932,decode(3,673,X));var sig2;",
+        )) assertFailsWith<UnsupportedPlayerException>(body) { PlayerProgram.compile(landmark(prefix + body)) }
+        val parameter = landmark(prefix + "X=sig2(11,3932,decode(3,673,X));").replace("function(M,Q,X)", "function(M,sig2,X)")
+        assertFailsWith<UnsupportedPlayerException> { PlayerProgram.compile(parameter) }
+    }
+
     @Test fun onlyLexicalPlayerScopeDefinitionsAreUsed() {
         val p = compile(extra = """
             var bait="sig=function(x){return 'bad'};";
